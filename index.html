@@ -1562,7 +1562,7 @@ function renderBackup(app){
 
 /* ================= TEAM: days worked and paying subcontractors ================= */
 const fmtDays = n => { const v=Math.round(n*100)/100; return `${v} day${v===1?"":"s"}`; };
-const portionLabel = p => p===1?"Full day":p===0.5?"Half day":`${p} day`;
+const portionLabel = p => p===1?"Full day":p===0.5?"Half day":p===0?"Price work":`${p} day`;
 function weekStartISO(iso){ const d=new Date(iso+"T12:00:00"); const k=(d.getDay()+6)%7; d.setDate(d.getDate()-k); return d.toISOString().slice(0,10); }
 const workerPayments = wid => allExpenses().filter(e=>e.workerId===wid);
 function workerStats(wid){
@@ -1727,7 +1727,7 @@ function renderWorkDay(app){
     const dates=d.isNew?d.dates:[d.date];
     if(!d.workers.length){ toast("Tick who worked"); return; } if(!dates.length||!dates[0]){ toast(d.isNew?"Tap the days they worked":"Pick the date"); return; }
     if(mode==="other"&&!(+d.custom>0)){ toast("Enter the amount"); return; }
-    const portion = mode==="half" ? 0.5 : 1;
+    const portion = mode==="half" ? 0.5 : (mode==="other"&&d.portion===0 ? 0 : 1);
     try{
       const sv=$("#save"); if(sv.disabled) return; sv.disabled=true; sv.textContent="Saving…";
       if(!d.isNew){ await put("workDays",d.id,{workerId:d.workers[0],date:dates[0],portion,amount:amountFor(d.workers[0]),clientId:d.clientId,documentId:d.documentId,notes:d.notes}); toast("Day saved"); back(); return; }
