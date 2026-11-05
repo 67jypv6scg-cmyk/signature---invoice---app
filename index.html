@@ -87,6 +87,14 @@ button.stat:hover{border-color:var(--accent)}
 .seg2{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
 .seg2 button{border:1px solid var(--line);background:var(--bg);color:var(--fg);border-radius:8px;padding:10px 6px;font-weight:600}
 .seg2 button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.wk-nav{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.wk-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.wk-days button{border:1px solid var(--line);background:var(--bg);color:var(--fg);border-radius:8px;padding:8px 0;display:grid;gap:1px;font-weight:600;position:relative}
+.wk-days button small{font-size:.7rem;color:var(--muted);font-weight:600;text-transform:uppercase}
+.wk-days button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.wk-days button[aria-pressed="true"] small{color:inherit;opacity:.85}
+.wk-days button.today{box-shadow:inset 0 0 0 2px var(--accent)}
+.wk-days button .dot{position:absolute;top:4px;right:5px;width:6px;height:6px;border-radius:50%;background:var(--warn)}
 .quick .btn{justify-content:center;padding:12px 6px;font-size:.88rem}
 .pills{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
 .pill{border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:99px;padding:5px 12px;font-size:.85rem;font-weight:600}
@@ -1624,7 +1632,7 @@ function openWorkDay(id,workerId=""){
   else {
     const ws=activeWorkers().map(([k])=>k);
     const last=Object.values(S.workDays).sort((a,b)=>b.date.localeCompare(a.date))[0];
-    dayDraft={id:null,isNew:true,date:todayISO(),mode:"full",custom:"",workers:workerId?[workerId]:ws,clientId:last?.clientId||"",documentId:last?.documentId||"",notes:""};
+    dayDraft={id:null,isNew:true,date:todayISO(),dates:[todayISO()],weekOf:weekStartISO(todayISO()),mode:"full",custom:"",workers:workerId?[workerId]:ws,clientId:last?.clientId||"",documentId:last?.documentId||"",notes:""};
   }
   go("workDay");
 }
@@ -1636,15 +1644,22 @@ function renderWorkDay(app){
   const amountFor=wid=>{ const r=S.workers[wid]?.dayRate||0; return mode==="other"?r2(d.custom||0):r2(r*(mode==="half"?0.5:1)); };
   app.innerHTML=`
   <div class="top">${backBtn()}<button class="btn small primary" id="save">Save</button></div>
-  <h1 style="margin-bottom:12px">${d.isNew?"Log a work day":"Edit work day"}</h1>
+  <h1 style="margin-bottom:12px">${d.isNew?"Log work days":"Edit work day"}</h1>
   <div class="card">
     <div class="field"><span class="label">Who worked</span>
       <div class="who-pick">${(d.isNew?ws:ws.filter(([id])=>d.workers.includes(id)).concat(d.workers.filter(id=>!ws.find(([k])=>k===id)).map(id=>[id,S.workers[id]||{name:"Painter"}]))).map(([id,w])=>`<label><input type="checkbox" data-w="${id}" ${d.workers.includes(id)?"checked":""} ${d.isNew?"":"disabled"}> ${esc(w.name)}</label>`).join("")}</div></div>
-    <label class="field" style="max-width:220px"><span class="label">Date</span><input id="wd-date" type="date" value="${esc(d.date)}"></label>
+    ${d.isNew?(()=>{ const days=[...Array(7)].map((_,i)=>addDays(d.weekOf,i)); const today=todayISO();
+      const logged=new Set(Object.values(S.workDays).filter(x=>d.workers.includes(x.workerId)).map(x=>x.date));
+      return `<div class="field"><div class="wk-nav"><span class="label">Days worked · tap each day</span><span class="sub">${d.dates.length} selected</span></div>
+      <div class="wk-nav"><button class="btn small" id="wk-prev" aria-label="Previous week">‹</button><span class="sub">${niceDate(days[0])} – ${niceDate(days[6])}</span><button class="btn small" id="wk-next" aria-label="Next week">›</button></div>
+      <div class="wk-days">${days.map(iso=>{ const dt=new Date(iso+"T12:00:00"); return `<button data-day="${iso}" aria-pressed="${d.dates.includes(iso)}" class="${iso===today?"today":""}" title="${logged.has(iso)?"Already has a day logged":""}"><small>${dt.toLocaleDateString("en-GB",{weekday:"short"}).slice(0,2)}</small>${dt.getDate()}${logged.has(iso)?'<span class="dot"></span>':""}</button>`; }).join("")}</div>
+      <div class="btns"><button class="btn small" id="wk-mf">Mon–Fri</button><button class="btn small" id="wk-clear">Clear</button></div>
+      ${logged.size&&days.some(x=>logged.has(x))?`<span class="sub">An orange dot means a day is already logged for one of the ticked painters.</span>`:""}</div>`; })()
+    :`<label class="field" style="max-width:220px"><span class="label">Date</span><input id="wd-date" type="date" value="${esc(d.date)}"></label>`}
     <div class="field"><span class="label">How long</span>
       <div class="seg2"><button data-mode="full" aria-pressed="${mode==="full"}">Full day</button><button data-mode="half" aria-pressed="${mode==="half"}">Half day</button><button data-mode="other" aria-pressed="${mode==="other"}">Set amount</button></div></div>
     ${mode==="other"?`<label class="field" style="max-width:200px"><span class="label">Amount £ (each)</span><input id="wd-custom" inputmode="decimal" value="${esc(d.custom)}" placeholder="e.g. 250"></label>`:""}
-    <div class="totals" id="wd-tot">${d.workers.map(wid=>`<div><span>${esc(S.workers[wid]?.name||"")}</span><span>${money(amountFor(wid))}</span></div>`).join("")}</div>
+    <div class="totals" id="wd-tot">${totLines()}</div>
   </div>
   <div class="card">
     <label class="field"><span class="label">Client or job</span><select id="wd-client"><option value="">Not linked to a client</option>${clientOpts}</select></label>
@@ -1652,22 +1667,31 @@ function renderWorkDay(app){
     <label class="field"><span class="label">Notes</span><input id="wd-notes" value="${esc(d.notes)}" placeholder="e.g. Hallway and stairs"></label>
   </div>
   ${d.isNew?"":`<div class="btns" style="justify-content:flex-end"><button class="btn danger" id="del">Delete</button></div>`}`;
-  const keep=()=>{ d.date=$("#wd-date").value; d.notes=$("#wd-notes").value; d.clientId=$("#wd-client").value; d.documentId=$("#wd-doc").value; const c=$("#wd-custom"); if(c) d.custom=c.value; };
+  function totLines(){ const n=d.isNew?d.dates.length:1; return d.workers.map(wid=>`<div><span>${esc(S.workers[wid]?.name||"")}${n>1?` · ${n} × ${money(amountFor(wid))}`:""}</span><span>${money(amountFor(wid)*n)}</span></div>`).join("")+(d.workers.length>1&&n>0?`<div class="big"><span>Total</span><span>${money(d.workers.reduce((a,w)=>a+amountFor(w)*n,0))}</span></div>`:""); }
+  $("#wd-tot").innerHTML=totLines();
+  const keep=()=>{ const di=$("#wd-date"); if(di) d.date=di.value; d.notes=$("#wd-notes").value; d.clientId=$("#wd-client").value; d.documentId=$("#wd-doc").value; const c=$("#wd-custom"); if(c) d.custom=c.value; };
   app.querySelectorAll("[data-w]").forEach(cb=>cb.onchange=()=>{ keep(); d.workers=[...app.querySelectorAll("[data-w]:checked")].map(x=>x.dataset.w); rerenderKeep(); });
   app.querySelectorAll("[data-mode]").forEach(b=>b.onclick=()=>{ keep(); d.mode=b.dataset.mode; rerenderKeep(); });
   $("#wd-client").onchange=()=>{ keep(); const doc=S.invoices[d.documentId]; if(doc&&doc.clientId!==d.clientId) d.documentId=""; rerenderKeep(); };
   $("#wd-doc").onchange=()=>{ keep(); const doc=S.invoices[d.documentId]; if(doc&&doc.clientId) d.clientId=doc.clientId; rerenderKeep(); };
-  const c=$("#wd-custom"); if(c) c.oninput=()=>{ d.custom=c.value; $("#wd-tot").innerHTML=d.workers.map(wid=>`<div><span>${esc(S.workers[wid]?.name||"")}</span><span>${money(amountFor(wid))}</span></div>`).join(""); };
+  const c=$("#wd-custom"); if(c) c.oninput=()=>{ d.custom=c.value; $("#wd-tot").innerHTML=totLines(); };
+  app.querySelectorAll("[data-day]").forEach(b=>b.onclick=()=>{ keep(); const iso=b.dataset.day; d.dates=d.dates.includes(iso)?d.dates.filter(x=>x!==iso):d.dates.concat(iso).sort(); rerenderKeep(); });
+  const wp=$("#wk-prev"); if(wp){ wp.onclick=()=>{ keep(); d.weekOf=addDays(d.weekOf,-7); rerenderKeep(); };
+    $("#wk-next").onclick=()=>{ keep(); d.weekOf=addDays(d.weekOf,7); rerenderKeep(); };
+    $("#wk-mf").onclick=()=>{ keep(); const wk=[0,1,2,3,4].map(i=>addDays(d.weekOf,i)); d.dates=[...new Set(d.dates.filter(x=>x<d.weekOf||x>addDays(d.weekOf,6)).concat(wk))].sort(); rerenderKeep(); };
+    $("#wk-clear").onclick=()=>{ keep(); d.dates=[]; rerenderKeep(); }; }
   $("#save").onclick=async()=>{ keep();
-    if(!d.workers.length){ toast("Tick who worked"); return; } if(!d.date){ toast("Pick the date"); return; }
+    const dates=d.isNew?d.dates:[d.date];
+    if(!d.workers.length){ toast("Tick who worked"); return; } if(!dates.length||!dates[0]){ toast(d.isNew?"Tap the days they worked":"Pick the date"); return; }
     if(mode==="other"&&!(+d.custom>0)){ toast("Enter the amount"); return; }
     const portion = mode==="half" ? 0.5 : 1;
     try{
-      for(const wid of d.workers){
+      let n=0;
+      for(const wid of d.workers) for(const date of dates){
         const id=d.isNew?uid("wd_"):d.id;
-        await put("workDays",id,{workerId:wid,date:d.date,portion,amount:amountFor(wid),clientId:d.clientId,documentId:d.documentId,notes:d.notes});
+        await put("workDays",id,{workerId:wid,date,portion,amount:amountFor(wid),clientId:d.clientId,documentId:d.documentId,notes:d.notes}); n++;
       }
-      toast(d.workers.length>1?`${d.workers.length} days logged`:"Day logged"); back();
+      toast(n>1?`${n} days logged`:"Day saved"); back();
     }catch(e){ toast("Couldn't save: "+(e?.message||"try again")); } };
   const del2=$("#del"); if(del2) armDelete(del2,"Delete",async()=>{ await del("workDays",d.id); toast("Day deleted"); back(); });
 }
