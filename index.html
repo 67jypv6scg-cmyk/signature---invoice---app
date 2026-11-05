@@ -394,8 +394,8 @@ function docToRow(id,i){
 }
 const rowToClient = r => ({name:r.name, address:r.address||"", phone:r.phone||"", email:r.email||"", notes:r.notes||"", source:r.source||"", ...(r.history?{history:r.history}:{})});
 const clientToRow = (id,c) => ({id, name:c.name||"", address:c.address||"", phone:c.phone||"", email:c.email||"", notes:c.notes||"", source:c.source||"", history:c.history||null});
-const rowToExp = r => ({date:r.date, supplier:r.supplier||"", category:r.category, amount:+r.amount, method:r.method||"", clientId:r.client_id||"", notes:r.notes||"", receipts:r.receipts||[], source:r.source||"", workerId:r.worker_id||"", linkedPaymentId:r.linked_payment_id||""});
-const expToRow = (id,e) => ({id, date:e.date, supplier:e.supplier||"", category:e.category||"otherExpenses", amount:r2(e.amount), method:e.method||"", client_id:nn(e.clientId), notes:e.notes||"", receipts:e.receipts||[], source:e.source||"", worker_id:nn(e.workerId), linked_payment_id:nn(e.linkedPaymentId)});
+const rowToExp = r => ({date:r.date, supplier:r.supplier||"", category:r.category, amount:+r.amount, method:r.method||"", clientId:r.client_id||"", notes:r.notes||"", receipts:r.receipts||[], source:r.source||"", workerId:r.worker_id||"", linkedPaymentId:r.linked_payment_id||"", documentId:r.document_id||""});
+const expToRow = (id,e) => ({id, date:e.date, supplier:e.supplier||"", category:e.category||"otherExpenses", amount:r2(e.amount), method:e.method||"", client_id:nn(e.clientId), notes:e.notes||"", receipts:e.receipts||[], source:e.source||"", worker_id:nn(e.workerId), linked_payment_id:nn(e.linkedPaymentId), document_id:nn(e.documentId)});
 
 async function fetchAll(table){
   const out=[]; const step=1000;
@@ -813,6 +813,14 @@ function renderDoc(app){
       </div>`).join(""):`<p class="sub" style="margin:0">No payments recorded yet. Deposits and part-payments go here too.</p>`}</div>
     <button class="btn small" id="addPay" style="justify-self:start">+ Record a payment</button>
   </div>`}
+  ${(()=>{ if(d.isNew) return "";
+    const dd=Object.values(S.workDays).filter(x=>x.documentId===d.id), pp=allExpenses().filter(e=>e.workerId&&e.documentId===d.id);
+    if(!dd.length&&!pp.length) return "";
+    const ws=[...new Set(dd.map(x=>x.workerId).concat(pp.map(e=>e.workerId)))];
+    return `<div class="card"><h2>Crew on this invoice</h2>
+      <table class="tbl"><tr><td class="sub">Painter</td><td class="sub r">Days</td><td class="sub r">Earned</td><td class="sub r">Paid</td></tr>
+      ${ws.map(wid=>{ const a=dd.filter(x=>x.workerId===wid), b=pp.filter(e=>e.workerId===wid); return `<tr><td>${esc((S.workers[wid]?.name||"").split(" ")[0])}</td><td class="r">${Math.round(a.reduce((s,x)=>s+x.portion,0)*100)/100}</td><td class="r">${money(a.reduce((s,x)=>s+x.amount,0))}</td><td class="r">${money(b.reduce((s,e)=>s+e.amount,0))}</td></tr>`; }).join("")}</table>
+      <p class="sub" style="margin:0">From Team. Crew pay is your cost, so it doesn't change this invoice.</p></div>`; })()}
   <div class="card"><h2>Notes &amp; terms</h2><textarea id="f-notes" data-k="notes" rows="9">${esc(d.notes)}</textarea></div>
   <div class="btns" style="justify-content:space-between">
     <div class="btns">
@@ -1363,11 +1371,14 @@ function renderExpense(app){
       <label class="field"><span class="label">Paid by</span><select id="e-m" data-e="method">${METHODS.map(m=>`<option ${e.method===m?"selected":""}>${m}</option>`).join("")}</select></label>
       <label class="field"><span class="label">For a client's job (optional)</span><select id="e-cli" data-e="clientId"><option value="">Not job-specific</option>${clientOpts}</select></label>
     </div>
+    ${e.clientId?`<label class="field"><span class="label">Invoice number (optional)</span><select id="e-doc" data-e="documentId"><option value="">None</option>${docs("invoice").filter(i=>i.clientId===e.clientId).sort((a,b)=>b.date.localeCompare(a.date)).map(i=>`<option value="${i.id}" ${e.documentId===i.id?"selected":""}>${esc(i.number)} · ${ukDate(i.date)}</option>`).join("")}</select></label>`:""}
+    ${e.workerId?`<p class="sub" style="margin:0">Payment to ${esc(S.workers[e.workerId]?.name||"a painter")}, recorded from Team.</p>`:""}
     <label class="field"><span class="label">Notes</span><textarea id="e-notes" data-e="notes" rows="3" placeholder="What was bought, which job">${esc(e.notes)}</textarea></label>
   </div>
   <p class="sub">Keep receipts for at least 5 years after the 31 January filing deadline. HMRC can ask to see them.</p>
   ${e.isNew?"":`<div class="btns" style="justify-content:flex-end"><button class="btn danger" id="del">Delete</button></div>`}`;
   app.oninput=app.onchange=ev=>{ const k=ev.target.dataset.e; if(k){ e[k]=ev.target.value; (e._touched=e._touched||{})[k]=true; } };
+  $("#e-cli").addEventListener("change",ev=>{ e.clientId=ev.target.value; if(e.documentId&&S.invoices[e.documentId]?.clientId!==e.clientId) e.documentId=""; rerenderKeep(); });
   $("#e-sup").onchange=ev=>{ // remember the category last used for this supplier
     const prev=allExpenses().filter(x=>x.supplier===ev.target.value).sort((a,b)=>b.date.localeCompare(a.date))[0];
     if(prev&&e.isNew){ e.category=prev.category; $("#e-cat").value=prev.category; } };
@@ -1605,8 +1616,8 @@ function renderWorker(app){
   s.days.forEach(x=>{ const k=x.date.slice(0,7); const m=months[k]=months[k]||{days:0,earned:0,paid:0}; m.days+=x.portion; m.earned+=x.amount; });
   s.pays.forEach(x=>{ const k=x.date.slice(0,7); const m=months[k]=months[k]||{days:0,earned:0,paid:0}; m.paid+=x.amount; });
   const mk=Object.keys(months).sort().reverse().slice(0,12);
-  const events=[...s.days.map(x=>({kind:"day",id:x.id,date:x.date,amt:x.amount,t:portionLabel(x.portion)+(x.clientId&&S.clients[x.clientId]?` · ${S.clients[x.clientId].name}`:"")})),
-    ...s.pays.map(x=>({kind:"pay",id:x.id,date:x.date,amt:x.amount,t:`Paid · ${x.method||""}${x.clientId&&S.clients[x.clientId]?` · ${S.clients[x.clientId].name}`:""}`}))]
+  const events=[...s.days.map(x=>({kind:"day",id:x.id,date:x.date,amt:x.amount,t:portionLabel(x.portion)+(x.clientId&&S.clients[x.clientId]?` · ${S.clients[x.clientId].name}`:"")+(docNo(x.documentId)?` · ${docNo(x.documentId)}`:"")})),
+    ...s.pays.map(x=>({kind:"pay",id:x.id,date:x.date,amt:x.amount,t:`Paid · ${x.method||""}${x.clientId&&S.clients[x.clientId]?` · ${S.clients[x.clientId].name}`:""}${docNo(x.documentId)?` · ${docNo(x.documentId)}`:""}`}))]
     .sort((a,b)=>b.date.localeCompare(a.date)).slice(0,60);
   app.innerHTML=`
   <div class="top">${backBtn("Team")}<button class="btn small" id="edit">Edit</button></div>
@@ -1723,6 +1734,7 @@ function renderWorkDay(app){
 }
 
 let payDraft=null;
+const docNo = id => id&&S.invoices[id] ? S.invoices[id].number : "";
 /* ---- per-job figures: a job is the client the days were logged against ---- */
 const jobName = cid => cid ? (S.clients[cid]?.name||"Client removed") : "Not linked to a job";
 // one row per painter per job, counting from each painter's start date
@@ -1732,8 +1744,8 @@ function crewJobs(){
   Object.values(S.workDays).forEach(x=>{ const w=S.workers[x.workerId]; if(!w||x.date<w.trackingFrom) return;
     const r=row(x.workerId,x.clientId); r.days+=x.portion; r.earned+=x.amount; if(!r.first||x.date<r.first) r.first=x.date; if(x.date>r.last) r.last=x.date; if(x.documentId) r.docs.add(x.documentId); });
   allExpenses().forEach(e=>{ const w=S.workers[e.workerId]; if(!w||e.date<w.trackingFrom) return;
-    const r=row(e.workerId,e.clientId); if(e.method==="Paid by client") r.paidClient+=e.amount; else r.paidMe+=e.amount; if(e.date>r.last) r.last=e.date; });
-  return Object.values(rows).map(r=>({...r,earned:r2(r.earned),paidMe:r2(r.paidMe),paidClient:r2(r.paidClient),owed:r2(r.earned-r.paidMe-r.paidClient)}));
+    const r=row(e.workerId,e.clientId); if(e.method==="Paid by client") r.paidClient+=e.amount; else r.paidMe+=e.amount; if(e.date>r.last) r.last=e.date; if(e.documentId) r.docs.add(e.documentId); });
+  return Object.values(rows).map(r=>({...r,docNos:[...r.docs].map(docNo).filter(Boolean),earned:r2(r.earned),paidMe:r2(r.paidMe),paidClient:r2(r.paidClient),owed:r2(r.earned-r.paidMe-r.paidClient)}));
 }
 function jobsSummary(){
   const by={}; crewJobs().forEach(r=>{ const k=r.clientId||""; (by[k]=by[k]||{clientId:k,rows:[],first:"",last:""}).rows.push(r);
@@ -1751,9 +1763,16 @@ function clientInvoiceLine(cid){
 }
 function jobCrewTable(rows,showName){
   return `<table class="tbl"><tr><td class="sub">${showName?"Painter":"Job"}</td><td class="sub r">Days</td><td class="sub r">Earned</td><td class="sub r">Paid</td><td class="sub r">Owed</td></tr>
-  ${rows.map(r=>`<tr><td>${esc(showName?(S.workers[r.workerId]?.name||"").split(" ")[0]:jobName(r.clientId))}${r.paidClient>0?`<br><span class="sub" style="font-size:.78rem">${money(r.paidClient)} paid by client</span>`:""}</td><td class="r">${Math.round(r.days*100)/100}</td><td class="r">${money(r.earned)}</td><td class="r">${money(r.paidMe+r.paidClient)}</td><td class="r" style="${r.owed>0?"color:var(--bad);font-weight:700":""}">${money(r.owed)}</td></tr>`).join("")}</table>`;
+  ${rows.map(r=>`<tr><td>${esc(showName?(S.workers[r.workerId]?.name||"").split(" ")[0]:jobName(r.clientId))}${!showName&&r.docNos.length?`<br><span class="sub" style="font-size:.78rem">${esc(r.docNos.join(", "))}</span>`:""}${r.paidClient>0?`<br><span class="sub" style="font-size:.78rem">${money(r.paidClient)} paid by client</span>`:""}</td><td class="r">${Math.round(r.days*100)/100}</td><td class="r">${money(r.earned)}</td><td class="r">${money(r.paidMe+r.paidClient)}</td><td class="r" style="${r.owed>0?"color:var(--bad);font-weight:700":""}">${money(r.owed)}</td></tr>`).join("")}</table>`;
 }
 
+function defaultRef(wid,cid){
+  if(!cid||cid==="auto") return "";
+  const fromDays=Object.values(S.workDays).filter(x=>x.workerId===wid&&x.clientId===cid&&x.documentId&&S.invoices[x.documentId]).sort((a,b)=>b.date.localeCompare(a.date))[0];
+  if(fromDays) return fromDays.documentId;
+  const latest=docs("invoice").filter(i=>i.clientId===cid).sort((a,b)=>b.date.localeCompare(a.date))[0];
+  return latest?latest.id:"";
+}
 function openWorkerPay(wid){
   const s=workerStats(wid);
   payDraft={workerId:wid,date:todayISO(),amount:s.owed>0?s.owed.toFixed(2):"",how:"Bank transfer",job:"auto",documentId:"",notes:""};
@@ -1791,12 +1810,13 @@ function renderWorkerPay(app){
         ${owing.map(r=>`<option value="${esc(r.clientId)}" ${p.job===r.clientId?"selected":""}>${esc(jobName(r.clientId))} · ${money(r.owed)} owed</option>`).join("")}
         ${Object.entries(S.clients).filter(([id])=>!owing.some(r=>r.clientId===id)).sort((a,b)=>a[1].name.localeCompare(b[1].name)).map(([id,c])=>`<option value="${id}" ${p.job===id?"selected":""}>${esc(c.name)}</option>`).join("")}
         <option value="" ${p.job===""?"selected":""}>Not linked to a job</option></select></label>
-      ${plan.length>1?`<div class="info">This will be split: ${plan.map(x=>`${esc(jobName(x.clientId))} ${money(x.amount)}`).join(" · ")}</div>`:""}`}
+      ${p.job&&p.job!=="auto"?(()=>{ const ivs=docs("invoice").filter(i=>i.clientId===p.job).sort((a,b)=>b.date.localeCompare(a.date)); return `<label class="field"><span class="label">Invoice number (for reference, it doesn't change the invoice)</span><select id="wp-ref"><option value="">No invoice yet</option>${ivs.map(i=>`<option value="${i.id}" ${p.refDoc===i.id?"selected":""}>${esc(i.number)} · ${ukDate(i.date)} · ${money(totals(i).total)}</option>`).join("")}</select></label>`; })():""}
+      ${plan.length>1?`<div class="info">This will be split: ${plan.map(x=>`${esc(jobName(x.clientId))}${docNo(defaultRef(p.workerId,x.clientId))?` (${esc(docNo(defaultRef(p.workerId,x.clientId)))})`:""} ${money(x.amount)}`).join(" · ")}</div>`:""}`}
     <label class="field"><span class="label">Notes</span><input id="wp-notes" value="${esc(p.notes)}" placeholder="e.g. Week ending Friday"></label>
   </div>`;
-  const keep=()=>{ p.date=$("#wp-date").value; p.amount=$("#wp-amt").value; p.notes=$("#wp-notes").value; const dd=$("#wp-doc"); if(dd) p.documentId=dd.value; const jj=$("#wp-job"); if(jj) p.job=jj.value; };
+  const keep=()=>{ p.date=$("#wp-date").value; p.amount=$("#wp-amt").value; p.notes=$("#wp-notes").value; const dd=$("#wp-doc"); if(dd) p.documentId=dd.value; const jj=$("#wp-job"); if(jj) p.job=jj.value; const rf=$("#wp-ref"); if(rf) p.refDoc=rf.value; };
   app.querySelectorAll("[data-how]").forEach(b=>b.onclick=()=>{ keep(); p.how=b.dataset.how; rerenderKeep(); });
-  const jj=$("#wp-job"); if(jj) jj.onchange=()=>{ keep(); const r=owing.find(x=>x.clientId===p.job); if(r) p.amount=r.owed.toFixed(2); else if(p.job==="auto"&&s.owed>0) p.amount=s.owed.toFixed(2); rerenderKeep(); };
+  const jj=$("#wp-job"); if(jj) jj.onchange=()=>{ keep(); p.refDoc=defaultRef(p.workerId,p.job); const r=owing.find(x=>x.clientId===p.job); if(r) p.amount=r.owed.toFixed(2); else if(p.job==="auto"&&s.owed>0) p.amount=s.owed.toFixed(2); rerenderKeep(); };
   $("#wp-amt").onchange=()=>{ keep(); if(p.job==="auto") rerenderKeep(); };
   $("#save").onclick=async()=>{ keep(); const amt=r2(p.amount); const sv=$("#save"); if(sv.disabled) return;
     if(!(amt>0)){ toast("Enter the amount"); return; } if(!p.date){ toast("Pick the date"); return; }
@@ -1809,10 +1829,10 @@ function renderWorkerPay(app){
         if(inv.status==="draft") inv.status="sent";
         (inv.history=inv.history||[]).push({at:new Date().toISOString(),text:`Payment recorded: ${money(amt)} on ${ukDate(p.date)}, paid by the client straight to ${w.name}`});
         await put("invoices",p.documentId,inv);
-        await put("expenses",uid("exp_"),{date:p.date,supplier:w.name,category:"cisPaymentsToSubcontractors",amount:amt,method:"Paid by client",clientId,notes:p.notes||`Paid by the client on ${inv.number}`,receipts:[],source:"team",workerId:p.workerId,linkedPaymentId:linked});
+        await put("expenses",uid("exp_"),{date:p.date,supplier:w.name,category:"cisPaymentsToSubcontractors",amount:amt,method:"Paid by client",clientId,documentId:p.documentId,notes:p.notes||`Paid by the client on ${inv.number}`,receipts:[],source:"team",workerId:p.workerId,linkedPaymentId:linked});
       } else {
-        const parts = p.job==="auto" ? allocatePay(p.workerId,amt) : [{clientId:p.job,amount:amt}];
-        for(const x of parts) await put("expenses",uid("exp_"),{date:p.date,supplier:w.name,category:"cisPaymentsToSubcontractors",amount:x.amount,method:p.how,clientId:x.clientId,notes:p.notes||"",receipts:[],source:"team",workerId:p.workerId,linkedPaymentId:""});
+        const parts = p.job==="auto" ? allocatePay(p.workerId,amt).map(x=>({...x,doc:defaultRef(p.workerId,x.clientId)})) : [{clientId:p.job,amount:amt,doc:p.refDoc||""}];
+        for(const x of parts) await put("expenses",uid("exp_"),{date:p.date,supplier:w.name,category:"cisPaymentsToSubcontractors",amount:x.amount,method:p.how,clientId:x.clientId,documentId:x.doc,notes:p.notes||(docNo(x.doc)?`For ${docNo(x.doc)}`:""),receipts:[],source:"team",workerId:p.workerId,linkedPaymentId:""});
       }
       toast("Payment recorded"); back();
     }catch(e){ sv.disabled=false; sv.textContent="Save"; toast("Couldn't save: "+(e?.message||"try again")); } };
