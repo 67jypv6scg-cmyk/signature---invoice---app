@@ -90,6 +90,9 @@ button.stat:hover{border-color:var(--accent)}
 .cp-in input{min-width:0;width:100%}
 .cp-proj{margin-top:4px}
 .cp-keep{border-left:4px solid var(--accent);padding:8px 10px;background:var(--surface);border-radius:6px;font-size:.92rem}
+.month-tog{width:100%;background:none;border:0;padding:0;color:inherit;font:inherit;cursor:pointer;text-align:left;display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.month-tog h2{display:flex;align-items:center;gap:8px}
+.month-tog .chev{display:inline-block;width:1em;color:var(--accent)}
 .wk-tap{background:none;border:1px solid var(--line);border-radius:10px;padding:10px;text-align:left;font:inherit;cursor:pointer;width:100%}
 .wk-tap:active{background:var(--bg)}
 .wk-more{grid-column:1/-1;color:var(--accent);font-weight:700;font-size:.88rem}
@@ -1407,15 +1410,23 @@ function renderExpenses(app){
     <select id="exp-cat"><option value="">All categories</option>${CATS.map(([k,l])=>`<option value="${k}" ${ui.expCat===k?"selected":""}>${l}</option>`).join("")}</select>
   </div>
   <div class="pills"><button class="pill" id="exp-miss" aria-pressed="${!!ui.expMissing}">Missing a receipt (${allExpenses().filter(noRcpt).length})</button></div>
+  ${Object.keys(groups).length>1?`<div class="btns" style="justify-content:flex-end;margin:4px 0 -4px"><button class="btn small" id="exp-all">${Object.keys(groups).every(k=>expMonthOpen(k))?"Collapse all":"Expand all"}</button></div>`:""}
   ${loading("expenses")?`<div class="empty">Loading…</div>`:Object.keys(groups).length?Object.entries(groups).map(([k,es])=>`
-    <div class="sect"><h2>${new Date(k+"-01T12:00").toLocaleDateString("en-GB",{month:"long",year:"numeric"})}</h2><span class="sub num">${money(es.reduce((a,e)=>a+e.amount,0))}</span></div>
-    <div class="list">${es.map(e=>`<button class="row" data-act="expense" data-v="${e.id}"><span class="who">${esc(e.supplier||CAT[e.category])}</span><span class="amt">${money(e.amount)}</span><span class="meta">${esc(CAT[e.category]||"")}${e.clientId&&S.clients[e.clientId]?` · ${esc(S.clients[e.clientId].name)}`:""}</span><span class="meta r">${noRcpt(e)?"":`<span class="tag-ok">Receipt</span> · `}${ukDate(e.date)}</span></button>`).join("")}</div>`).join("")
+    <button class="sect month-tog" data-month="${k}" aria-expanded="${expMonthOpen(k)}"><h2><span class="chev">${expMonthOpen(k)?"▾":"▸"}</span> ${new Date(k+"-01T12:00").toLocaleDateString("en-GB",{month:"long",year:"numeric"})}</h2><span class="sub num">${es.length} · ${money(es.reduce((a,e)=>a+e.amount,0))}</span></button>
+    ${expMonthOpen(k)?`    <div class="list">${es.map(e=>`<button class="row" data-act="expense" data-v="${e.id}"><span class="who">${esc(e.supplier||CAT[e.category])}</span><span class="amt">${money(e.amount)}</span><span class="meta">${esc(CAT[e.category]||"")}${e.clientId&&S.clients[e.clientId]?` · ${esc(S.clients[e.clientId].name)}`:""}</span><span class="meta r">${noRcpt(e)?"":`<span class="tag-ok">Receipt</span> · `}${ukDate(e.date)}</span></button>`).join("")}</div>`:""}`).join("")
   :`<div class="list"><div class="empty">${ui.expQ||ui.expCat?"Nothing matches.":"No expenses yet. Log materials, wages, fuel and lead fees here so your quarterly profit is right."}</div></div>`}`;
   fab("+ Add expense","new-expense");
   $("#exp-q").oninput=e=>{ ui.expQ=e.target.value; const p=e.target.selectionStart; render(); const q=$("#exp-q"); q.focus(); q.setSelectionRange(p,p); };
   $("#exp-cat").onchange=e=>{ ui.expCat=e.target.value; render(); };
   $("#exp-miss").onclick=()=>{ ui.expMissing=!ui.expMissing; render(); };
+  app.querySelectorAll("[data-month]").forEach(b=>b.onclick=()=>{ const k=b.dataset.month; const o=expOpenSet(); if(expMonthOpen(k)) o.delete(k); else o.add(k); saveExpOpen(o); render(); });
+  const ea=$("#exp-all"); if(ea) ea.onclick=()=>{ const ks=Object.keys(groups); const all=ks.every(k=>expMonthOpen(k)); saveExpOpen(new Set(all?[]:ks)); render(); };
 }
+// which expense months are open: remembered on this device; this month is open the first time
+function expOpenSet(){ if(!ui.expOpen){ let saved=null; try{ saved=JSON.parse(localStorage.getItem("expOpen")||"null"); }catch(e){} ui.expOpen=new Set(saved||[todayISO().slice(0,7)]); } return ui.expOpen; }
+function saveExpOpen(set){ ui.expOpen=set; try{ localStorage.setItem("expOpen",JSON.stringify([...set])); }catch(e){} }
+// while searching or filtering, every month with a match is shown open
+function expMonthOpen(k){ return !!(ui.expQ||ui.expCat||ui.expMissing) || expOpenSet().has(k); }
 function openExpense(id,scan){
   expDraft = id ? {id,...JSON.parse(JSON.stringify(S.expenses[id]))} : {id:uid("exp_"),isNew:true,date:todayISO(),supplier:"",category:"costOfGoods",amount:"",method:"Card",clientId:"",notes:"",receipts:[]};
   if(!Array.isArray(expDraft.receipts)) expDraft.receipts=[];
