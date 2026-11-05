@@ -140,7 +140,7 @@ button.stat:hover{border-color:var(--accent)}
 input,select,textarea{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;width:100%;min-width:0}
 textarea{resize:vertical;min-height:70px}
 /* 16px stops iPhone zooming in (and staying zoomed) when you tap a box */
-@media (max-width:820px){input,select,textarea{font-size:16px}}
+@media (max-width:820px), (pointer:coarse){input,select,textarea{font-size:16px}}
 html,body{overflow-x:hidden;margin:0}
 .item{border:1px solid var(--line);border-radius:8px;padding:10px;display:grid;gap:8px}
 .item-nums{display:grid;grid-template-columns:minmax(0,1fr) 64px minmax(0,1fr) auto;gap:8px;align-items:end}
@@ -1419,14 +1419,18 @@ function renderExpenses(app){
   $("#exp-q").oninput=e=>{ ui.expQ=e.target.value; const p=e.target.selectionStart; render(); const q=$("#exp-q"); q.focus(); q.setSelectionRange(p,p); };
   $("#exp-cat").onchange=e=>{ ui.expCat=e.target.value; render(); };
   $("#exp-miss").onclick=()=>{ ui.expMissing=!ui.expMissing; render(); };
-  app.querySelectorAll("[data-month]").forEach(b=>b.onclick=()=>{ const k=b.dataset.month; const o=expOpenSet(); if(expMonthOpen(k)) o.delete(k); else o.add(k); saveExpOpen(o); render(); });
-  const ea=$("#exp-all"); if(ea) ea.onclick=()=>{ const ks=Object.keys(groups); const all=ks.every(k=>expMonthOpen(k)); saveExpOpen(new Set(all?[]:ks)); render(); };
+  app.querySelectorAll("[data-month]").forEach(b=>b.onclick=()=>{ const k=b.dataset.month; setExpMonth(k,!expMonthOpen(k)); render(); });
+  const ea=$("#exp-all"); if(ea) ea.onclick=()=>{ const ks=Object.keys(groups); const all=ks.every(k=>expMonthOpen(k)); ks.forEach(k=>setExpMonth(k,!all)); render(); };
 }
 // which expense months are open: remembered on this device; this month is open the first time
 function expOpenSet(){ if(!ui.expOpen){ let saved=null; try{ saved=JSON.parse(localStorage.getItem("expOpen")||"null"); }catch(e){} ui.expOpen=new Set(saved||[todayISO().slice(0,7)]); } return ui.expOpen; }
 function saveExpOpen(set){ ui.expOpen=set; try{ localStorage.setItem("expOpen",JSON.stringify([...set])); }catch(e){} }
 // while searching or filtering, every month with a match is shown open
-function expMonthOpen(k){ return !!(ui.expQ||ui.expCat||ui.expMissing) || expOpenSet().has(k); }
+const expFiltering = () => !!(ui.expQ||ui.expCat||ui.expMissing);
+function expFilterKey(){ return [ui.expQ||"",ui.expCat||"",ui.expMissing?1:0].join("|"); }
+function expFilterClosed(){ const key=expFilterKey(); if(ui.expFClosedKey!==key){ ui.expFClosedKey=key; ui.expFClosed=new Set(); } return ui.expFClosed; }
+function expMonthOpen(k){ return expFiltering() ? !expFilterClosed().has(k) : expOpenSet().has(k); }
+function setExpMonth(k,open){ if(expFiltering()){ const c=expFilterClosed(); if(open) c.delete(k); else c.add(k); } else { const o=expOpenSet(); if(open) o.add(k); else o.delete(k); saveExpOpen(o); } }
 function openExpense(id,scan){
   expDraft = id ? {id,...JSON.parse(JSON.stringify(S.expenses[id]))} : {id:uid("exp_"),isNew:true,date:todayISO(),supplier:"",category:"costOfGoods",amount:"",method:"Card",clientId:"",notes:"",receipts:[]};
   if(!Array.isArray(expDraft.receipts)) expDraft.receipts=[];
