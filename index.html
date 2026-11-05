@@ -1565,18 +1565,24 @@ const fmtDays = n => { const v=Math.round(n*100)/100; return `${v} day${v===1?""
 const portionLabel = p => p===1?"Full day":p===0.5?"Half day":p===0?"Price work":`${p} day`;
 function weekStartISO(iso){ const d=new Date(iso+"T12:00:00"); const k=(d.getDay()+6)%7; d.setDate(d.getDate()-k); return d.toISOString().slice(0,10); }
 const workerPayments = wid => allExpenses().filter(e=>e.workerId===wid);
+// Days always count. Payments recorded in Team always count, whatever their date, so past weeks can be filled in.
+// Older payments that came from the bank statement only count from the painter's start date (they were before days were logged).
+const countsDay = (x,w) => !!w;
+const countsPay = (e,w) => !!w && (e.source==="team" || e.date>=w.trackingFrom);
 function workerStats(wid){
   const w=S.workers[wid]; const from=w?.trackingFrom||"0000";
   const days=Object.entries(S.workDays).map(([id,x])=>({id,...x})).filter(x=>x.workerId===wid);
   const pays=workerPayments(wid);
-  const earned=r2(days.filter(x=>x.date>=from).reduce((a,x)=>a+x.amount,0));
-  const paid=r2(pays.filter(x=>x.date>=from).reduce((a,x)=>a+x.amount,0));
+  const cPays=pays.filter(e=>countsPay(e,w));
+  const earned=r2(days.reduce((a,x)=>a+x.amount,0));
+  const paid=r2(cPays.reduce((a,x)=>a+x.amount,0));
   const today=todayISO(), wk=weekStartISO(today), mo=today.slice(0,7), Y=taxYearOf(today), qs=quartersOf(Y);
   const sum=(arr,f)=>arr.filter(f).reduce((a,x)=>a+x.portion,0);
   // week by week from the start date, with what's still owed carried forward
-  const weeks=[]; if(from&&from!=="0000"){ let ws=weekStartISO(from); let carry=0;
+  const firstDate=[...days.map(x=>x.date),...cPays.map(x=>x.date)].sort()[0];
+  const weeks=[]; if(firstDate){ let ws=weekStartISO(firstDate<from?firstDate:from); let carry=0;
     while(ws<=wk){ const we=addDays(ws,6);
-      const dd=days.filter(x=>x.date>=ws&&x.date<=we&&x.date>=from), pp=pays.filter(x=>x.date>=ws&&x.date<=we&&x.date>=from);
+      const dd=days.filter(x=>x.date>=ws&&x.date<=we), pp=cPays.filter(x=>x.date>=ws&&x.date<=we);
       const e=r2(dd.reduce((a,x)=>a+x.amount,0)), pd=r2(pp.reduce((a,x)=>a+x.amount,0)); carry=r2(carry+e-pd);
       weeks.push({start:ws,end:we,days:dd.reduce((a,x)=>a+x.portion,0),earned:e,paid:pd,balance:carry}); ws=addDays(ws,7); } }
   return {days,pays,earned,paid,owed:r2(earned-paid),weeks,
@@ -1630,20 +1636,20 @@ function renderWorker(app){
   app.innerHTML=`
   <div class="top">${backBtn("Team")}<button class="btn small" id="edit">Edit</button></div>
   <h1>${esc(w.name)}</h1>
-  <p class="sub" style="margin:4px 0 14px">${money(w.dayRate)} a day · ${money(w.dayRate/2)} a half day · counting from ${niceDate(w.trackingFrom)} (paid up to then)</p>
+  <p class="sub" style="margin:4px 0 14px">${money(w.dayRate)} a day · ${money(w.dayRate/2)} a half day · old bank payments before ${niceDate(w.trackingFrom)} are left out</p>
   <div class="grid3" style="margin-bottom:14px">
     <div class="stat"><span class="label">To pay now</span><b style="${s.owed>0?"color:var(--bad)":""}">${money(s.owed)}</b></div>
     <div class="stat"><span class="label">This week</span><b>${fmtDays(s.week)}</b><span class="sub">${money(s.weekAmt)}</span></div>
     <div class="stat"><span class="label">Paid this tax year</span><b>${money0(s.paidYear)}</b></div>
   </div>
   <div class="btns" style="margin-bottom:6px"><button class="btn primary" data-act="new-workday" data-v="${params.id}">+ Log a day</button><button class="btn" data-act="pay-worker" data-v="${params.id}">Record a payment</button></div>
-  ${(()=>{ const rows=crewJobs().filter(r=>r.workerId===params.id).sort((a,b)=>b.last.localeCompare(a.last)); return rows.length?`<div class="sect"><h2>By job</h2><span class="sub">since ${niceDate(w.trackingFrom)}</span></div><div class="card">${jobCrewTable(rows,false)}</div>`:""; })()}
+  ${(()=>{ const rows=crewJobs().filter(r=>r.workerId===params.id).sort((a,b)=>b.last.localeCompare(a.last)); return rows.length?`<div class="sect"><h2>By job</h2></div><div class="card">${jobCrewTable(rows,false)}</div>`:""; })()}
   ${s.weeks.length?`<div class="sect"><h2>Week by week</h2><span class="sub">Mon–Sun</span></div><div class="card"><table class="tbl"><tr><td class="sub">Week</td><td class="sub r">Days</td><td class="sub r">Earned</td><td class="sub r">Paid</td><td class="sub r">Owed</td></tr>
     ${s.weeks.slice().reverse().slice(0,12).map(x=>`<tr><td>${new Date(x.start+"T12:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})}–${new Date(x.end+"T12:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})}</td><td class="r">${Math.round(x.days*100)/100}</td><td class="r">${money(x.earned)}</td><td class="r">${money(x.paid)}</td><td class="r" style="${x.balance>0?"color:var(--bad);font-weight:700":""}">${money(x.balance)}</td></tr>`).join("")}</table>
     <p class="sub" style="margin:0">Owed is the running total at the end of each week, so anything unpaid carries into the next week.</p></div>`:""}
   ${mk.length?`<div class="sect"><h2>By month</h2></div><div class="card"><table class="tbl"><tr><td class="sub">Month</td><td class="sub r">Days</td><td class="sub r">Earned</td><td class="sub r">Paid</td></tr>
     ${mk.map(k=>`<tr><td>${new Date(k+"-01T12:00").toLocaleDateString("en-GB",{month:"short",year:"numeric"})}</td><td class="r">${Math.round(months[k].days*100)/100}</td><td class="r">${money(months[k].earned)}</td><td class="r">${money(months[k].paid)}</td></tr>`).join("")}</table>
-    <p class="sub" style="margin:0">Everything before ${niceDate(w.trackingFrom)} was paid up, so it doesn't count towards what you owe. Those earlier payments are still in your expenses.</p></div>`:""}
+    <p class="sub" style="margin:0">Days and payments you log here count whatever their date, so you can fill in past weeks. Payments that came from your bank statement before ${niceDate(w.trackingFrom)} are left out, because those days were never logged. They're still in your expenses.</p></div>`:""}
   <div class="sect"><h2>Days and payments</h2></div>
   <div class="list">${events.length?events.map(e=>`<button class="row" data-act="${e.kind==="day"?"workday":"expense"}" data-v="${e.id}"><span class="who">${esc(e.t)}</span><span class="amt" style="${e.kind==="pay"?"color:var(--ok)":""}">${e.kind==="pay"?"−":""}${money(e.amt)}</span><span class="meta">${e.kind==="day"?"Worked":"Payment"}</span><span class="meta r">${niceDate(e.date)}</span></button>`).join(""):`<div class="empty">Nothing logged yet.</div>`}</div>`;
   $("#edit").onclick=()=>{ workerDraft={id:params.id,...w}; go("workerEdit"); };
@@ -1749,9 +1755,9 @@ const jobName = cid => cid ? (S.clients[cid]?.name||"Client removed") : "Not lin
 function crewJobs(){
   const rows={};
   const row=(wid,cid)=>{ const k=wid+"|"+(cid||""); return rows[k]=rows[k]||{workerId:wid,clientId:cid||"",days:0,earned:0,paidMe:0,paidClient:0,first:"",last:"",docs:new Set()}; };
-  Object.values(S.workDays).forEach(x=>{ const w=S.workers[x.workerId]; if(!w||x.date<w.trackingFrom) return;
+  Object.values(S.workDays).forEach(x=>{ const w=S.workers[x.workerId]; if(!countsDay(x,w)) return;
     const r=row(x.workerId,x.clientId); r.days+=x.portion; r.earned+=x.amount; if(!r.first||x.date<r.first) r.first=x.date; if(x.date>r.last) r.last=x.date; if(x.documentId) r.docs.add(x.documentId); });
-  allExpenses().forEach(e=>{ const w=S.workers[e.workerId]; if(!w||e.date<w.trackingFrom) return;
+  allExpenses().forEach(e=>{ const w=S.workers[e.workerId]; if(!countsPay(e,w)) return;
     const r=row(e.workerId,e.clientId); if(e.method==="Paid by client") r.paidClient+=e.amount; else r.paidMe+=e.amount; if(e.date>r.last) r.last=e.date; if(e.documentId) r.docs.add(e.documentId); });
   return Object.values(rows).map(r=>({...r,docNos:[...r.docs].map(docNo).filter(Boolean),earned:r2(r.earned),paidMe:r2(r.paidMe),paidClient:r2(r.paidClient),owed:r2(r.earned-r.paidMe-r.paidClient)}));
 }
@@ -1794,11 +1800,15 @@ function allocatePay(wid,amt){
   if(left>0) out.push({clientId:"",amount:left});
   return out;
 }
+function splitInfo(p){
+  if(p.how==="client"||p.job!=="auto"||!(+p.amount>0)) return "";
+  const plan=allocatePay(p.workerId,+p.amount); if(plan.length<2) return "";
+  return `<div class="info">This will be split: ${plan.map(x=>`${esc(jobName(x.clientId))}${docNo(defaultRef(p.workerId,x.clientId))?` (${esc(docNo(defaultRef(p.workerId,x.clientId)))})`:""} ${money(x.amount)}`).join(" · ")}</div>`;
+}
 function renderWorkerPay(app){
   const p=payDraft, w=S.workers[p.workerId], s=workerStats(p.workerId), direct=p.how==="client";
   const owing=crewJobs().filter(r=>r.workerId===p.workerId&&r.owed>0).sort((a,b)=>a.first.localeCompare(b.first));
   const invs=docs("invoice").filter(i=>i.status!=="draft").map(i=>({...i,_t:totals(i)})).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,40);
-  const plan=(!direct&&p.job==="auto"&&+p.amount>0)?allocatePay(p.workerId,+p.amount):[];
   app.innerHTML=`
   <div class="top">${backBtn()}<button class="btn small primary" id="save">Save</button></div>
   <h1 style="margin-bottom:6px">Pay ${esc(w?.name||"")}</h1>
@@ -1819,13 +1829,14 @@ function renderWorkerPay(app){
         ${Object.entries(S.clients).filter(([id])=>!owing.some(r=>r.clientId===id)).sort((a,b)=>a[1].name.localeCompare(b[1].name)).map(([id,c])=>`<option value="${id}" ${p.job===id?"selected":""}>${esc(c.name)}</option>`).join("")}
         <option value="" ${p.job===""?"selected":""}>Not linked to a job</option></select></label>
       ${p.job&&p.job!=="auto"?(()=>{ const ivs=docs("invoice").filter(i=>i.clientId===p.job).sort((a,b)=>b.date.localeCompare(a.date)); return `<label class="field"><span class="label">Invoice number (for reference, it doesn't change the invoice)</span><select id="wp-ref"><option value="">No invoice yet</option>${ivs.map(i=>`<option value="${i.id}" ${p.refDoc===i.id?"selected":""}>${esc(i.number)} · ${ukDate(i.date)} · ${money(totals(i).total)}</option>`).join("")}</select></label>`; })():""}
-      ${plan.length>1?`<div class="info">This will be split: ${plan.map(x=>`${esc(jobName(x.clientId))}${docNo(defaultRef(p.workerId,x.clientId))?` (${esc(docNo(defaultRef(p.workerId,x.clientId)))})`:""} ${money(x.amount)}`).join(" · ")}</div>`:""}`}
+      <div id="wp-split">${splitInfo(p)}</div>`}
     <label class="field"><span class="label">Notes</span><input id="wp-notes" value="${esc(p.notes)}" placeholder="e.g. Week ending Friday"></label>
   </div>`;
   const keep=()=>{ p.date=$("#wp-date").value; p.amount=$("#wp-amt").value; p.notes=$("#wp-notes").value; const dd=$("#wp-doc"); if(dd) p.documentId=dd.value; const jj=$("#wp-job"); if(jj) p.job=jj.value; const rf=$("#wp-ref"); if(rf) p.refDoc=rf.value; };
   app.querySelectorAll("[data-how]").forEach(b=>b.onclick=()=>{ keep(); p.how=b.dataset.how; rerenderKeep(); });
   const jj=$("#wp-job"); if(jj) jj.onchange=()=>{ keep(); p.refDoc=defaultRef(p.workerId,p.job); const r=owing.find(x=>x.clientId===p.job); if(r) p.amount=r.owed.toFixed(2); else if(p.job==="auto"&&s.owed>0) p.amount=s.owed.toFixed(2); rerenderKeep(); };
-  $("#wp-amt").onchange=()=>{ keep(); if(p.job==="auto") rerenderKeep(); };
+  // update the split preview in place: redrawing the screen here would swallow a tap on Save
+  $("#wp-amt").oninput=()=>{ p.amount=$("#wp-amt").value; const sp=$("#wp-split"); if(sp) sp.innerHTML=splitInfo(p); };
   $("#save").onclick=async()=>{ keep(); const amt=r2(p.amount); const sv=$("#save"); if(sv.disabled) return;
     if(!(amt>0)){ toast("Enter the amount"); return; } if(!p.date){ toast("Pick the date"); return; }
     if(direct&&!p.documentId){ toast("Choose the invoice the client paid towards"); return; }
