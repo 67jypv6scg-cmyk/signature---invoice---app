@@ -823,7 +823,7 @@ function renderDoc(app){
     <div style="display:grid;gap:10px" id="pays">${d.payments.length?d.payments.map((p,i)=>`
       <div class="pay-row">
         <label class="field"><span class="label">Date</span><input id="p-date-${i}" type="date" data-p="${i}" data-pf="date" value="${esc(p.date)}"></label>
-        <label class="field"><span class="label">Amount £</span><input id="p-amt-${i}" data-p="${i}" data-pf="amount" inputmode="decimal" value="${esc(p.amount)}" placeholder="${(()=>{const t=totals(d);return t.deposit>0&&!t.depositPaid?t.depositDue.toFixed(2):t.due.toFixed(2);})()}"></label>
+        <label class="field"><span class="label">Amount £</span><input id="p-amt-${i}" data-p="${i}" data-pf="amount" inputmode="decimal" value="${esc(p.amount)}" placeholder="Type the amount"></label>
         <label class="field pm"><span class="label">Method</span><select id="p-m-${i}" data-p="${i}" data-pf="method">${METHODS.map(m=>`<option ${p.method===m?"selected":""}>${m}</option>`).join("")}</select></label>
         <button class="icon-btn" data-rmp="${i}" aria-label="Remove payment" title="Remove payment">✕</button>
       </div>`).join(""):`<p class="sub" style="margin:0">No payments recorded yet. Deposits and part-payments go here too.</p>`}</div>
@@ -852,7 +852,7 @@ function renderDoc(app){
   app.querySelectorAll("[data-rm]").forEach(b=>b.onclick=()=>{ d.items.splice(+b.dataset.rm,1); if(!d.items.length) d.items.push({desc:"",rate:"",qty:1}); rerenderKeep(); });
   const cs=$("#f-client"); if(cs) cs.onchange=e=>{ const c=S.clients[e.target.value]; d.clientId=e.target.value; d.client=c?{name:c.name,address:c.address||"",phone:c.phone||"",email:c.email||""}:{name:"",address:"",phone:"",email:""}; rerenderKeep(); };
   if(!isQ){
-    $("#addPay").onclick=()=>{ d.payments.push({id:uid("p"),date:todayISO(),amount:"",method:"Bank transfer"}); rerenderKeep(); const n=d.payments.length-1; const a=$(`#p-amt-${n}`); if(a){ a.focus(); } };
+    $("#addPay").onclick=()=>{ const t0=totals(d); const pre=t0.deposit>0&&!t0.depositPaid?t0.depositDue.toFixed(2):""; d.payments.push({id:uid("p"),date:todayISO(),amount:pre,method:"Bank transfer",note:pre?"Deposit":""}); rerenderKeep(); const n=d.payments.length-1; const a=$(`#p-amt-${n}`); if(a){ a.focus(); } };
     const pf=$("#payFull"); pf.onclick=()=>{ const t=totals(d); if(t.due<=0){toast("Already paid in full");return;}
       if(!pf.classList.contains("arm")){ pf.classList.add("arm"); pf.textContent=`Tap again: paid ${money(t.due)}`; setTimeout(()=>{ if(pf.isConnected){ pf.classList.remove("arm"); pf.textContent="Paid in full"; } },4000); return; }
       d.payments.push({id:uid("p"),date:todayISO(),amount:t.due.toFixed(2),method:"Bank transfer"}); if(d.status==="draft") d.status="sent"; rerenderKeep(); toast("Payment added. Save to keep it."); };
@@ -974,6 +974,8 @@ function logHistory(d,text){
 }
 async function saveDoc(leave,quiet){
   const d=draft;
+  const blank=(d.payments||[]).filter(p=>!(+p.amount));
+  if(blank.length&&!quiet){ toast(blank.length>1?"Some payment lines have no amount. Type the amount, or tap ✕ to remove them.":"A payment line has no amount. Type the amount, or tap ✕ to remove it."); const a=$(`#p-amt-${d.payments.indexOf(blank[0])}`); if(a){ a.focus(); a.scrollIntoView({block:"center"}); } return false; }
   d.number=(d.number||"").trim()||nextNumber(d.type);
   d.items=d.items.filter((it,i)=>i===0||it.desc||it.rate);
   d.payments=(d.payments||[]).filter(p=>+p.amount).map(p=>({...p,amount:r2(p.amount)}));
