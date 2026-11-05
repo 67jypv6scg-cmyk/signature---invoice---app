@@ -60,6 +60,7 @@ button{font:inherit;cursor:pointer}
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .btn.danger{color:var(--bad);border-color:var(--bad-soft)}
 .btn.danger.arm{background:var(--bad);color:#fff;border-color:var(--bad)}
+#payFull.arm{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .btn.small{padding:6px 11px;font-size:.85rem}
 .btn:disabled{opacity:.55}
 .link{border:0;background:none;color:var(--accent);font-weight:600;padding:0}
@@ -766,7 +767,7 @@ function renderDoc(app){
     <div style="display:grid;gap:10px" id="pays">${d.payments.length?d.payments.map((p,i)=>`
       <div class="pay-row">
         <label class="field"><span class="label">Date</span><input id="p-date-${i}" type="date" data-p="${i}" data-pf="date" value="${esc(p.date)}"></label>
-        <label class="field"><span class="label">Amount £</span><input id="p-amt-${i}" data-p="${i}" data-pf="amount" inputmode="decimal" value="${esc(p.amount)}"></label>
+        <label class="field"><span class="label">Amount £</span><input id="p-amt-${i}" data-p="${i}" data-pf="amount" inputmode="decimal" value="${esc(p.amount)}" placeholder="${(()=>{const t=totals(d);return t.deposit>0&&!t.depositPaid?t.depositDue.toFixed(2):t.due.toFixed(2);})()}"></label>
         <label class="field pm"><span class="label">Method</span><select id="p-m-${i}" data-p="${i}" data-pf="method">${METHODS.map(m=>`<option ${p.method===m?"selected":""}>${m}</option>`).join("")}</select></label>
         <button class="icon-btn" data-rmp="${i}" aria-label="Remove payment" title="Remove payment">✕</button>
       </div>`).join(""):`<p class="sub" style="margin:0">No payments recorded yet. Deposits and part-payments go here too.</p>`}</div>
@@ -790,8 +791,10 @@ function renderDoc(app){
   app.querySelectorAll("[data-rm]").forEach(b=>b.onclick=()=>{ d.items.splice(+b.dataset.rm,1); if(!d.items.length) d.items.push({desc:"",rate:"",qty:1}); rerenderKeep(); });
   const cs=$("#f-client"); if(cs) cs.onchange=e=>{ const c=S.clients[e.target.value]; d.clientId=e.target.value; d.client=c?{name:c.name,address:c.address||"",phone:c.phone||"",email:c.email||""}:{name:"",address:"",phone:"",email:""}; rerenderKeep(); };
   if(!isQ){
-    $("#addPay").onclick=()=>{ const t=totals(d); d.payments.push({id:uid("p"),date:todayISO(),amount:t.due>0?t.due.toFixed(2):"",method:"Bank transfer"}); if(d.status==="draft") d.status="sent"; rerenderKeep(); };
-    $("#payFull").onclick=()=>{ const t=totals(d); if(t.due<=0){toast("Already paid in full");return;} d.payments.push({id:uid("p"),date:todayISO(),amount:t.due.toFixed(2),method:"Bank transfer"}); if(d.status==="draft") d.status="sent"; rerenderKeep(); toast("Payment added. Save to keep it."); };
+    $("#addPay").onclick=()=>{ d.payments.push({id:uid("p"),date:todayISO(),amount:"",method:"Bank transfer"}); rerenderKeep(); const n=d.payments.length-1; const a=$(`#p-amt-${n}`); if(a){ a.focus(); } };
+    const pf=$("#payFull"); pf.onclick=()=>{ const t=totals(d); if(t.due<=0){toast("Already paid in full");return;}
+      if(!pf.classList.contains("arm")){ pf.classList.add("arm"); pf.textContent=`Tap again: paid ${money(t.due)}`; setTimeout(()=>{ if(pf.isConnected){ pf.classList.remove("arm"); pf.textContent="Paid in full"; } },4000); return; }
+      d.payments.push({id:uid("p"),date:todayISO(),amount:t.due.toFixed(2),method:"Bank transfer"}); if(d.status==="draft") d.status="sent"; rerenderKeep(); toast("Payment added. Save to keep it."); };
     app.querySelectorAll("[data-rmp]").forEach(b=>b.onclick=()=>{ d.payments.splice(+b.dataset.rmp,1); rerenderKeep(); });
   }
   const conv=$("#conv"); if(conv) conv.onclick=async()=>{
@@ -846,6 +849,10 @@ async function saveDoc(leave,quiet){
     if(found) d.clientId=found[0];
     else { d.clientId=uid("cli_"); try{ await put("clients",d.clientId,{name,address:d.client.address,phone:d.client.phone,email:d.client.email,notes:"",source:""}); }catch(e){} }
   }
+  const before=new Map(((S.invoices[d.id]||{}).payments||[]).map(p=>[p.id,+p.amount]));
+  const after=new Map(d.payments.map(p=>[p.id,+p.amount]));
+  d.payments.forEach(p=>{ if(!before.has(p.id)) logHistory(d,`Payment recorded: ${money(p.amount)} on ${ukDate(p.date)}`); else if(before.get(p.id)!==+p.amount) logHistory(d,`Payment changed to ${money(p.amount)}`); });
+  before.forEach((amt,pid)=>{ if(!after.has(pid)) logHistory(d,`Payment of ${money(amt)} removed`); });
   logHistory(d);
   const {id,isNew,...data}=d; data.updated=new Date().toISOString();
   try{ await put("invoices",id,data); delete d.isNew; if(!quiet) toast(`${d.number} saved`); if(leave) back(); return true; }
