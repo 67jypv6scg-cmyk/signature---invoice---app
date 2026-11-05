@@ -813,14 +813,22 @@ function renderDoc(app){
       </div>`).join(""):`<p class="sub" style="margin:0">No payments recorded yet. Deposits and part-payments go here too.</p>`}</div>
     <button class="btn small" id="addPay" style="justify-self:start">+ Record a payment</button>
   </div>`}
-  ${(()=>{ if(d.isNew) return "";
+  ${(()=>{ if(d.isNew||d.type!=="invoice") return "";
     const dd=Object.values(S.workDays).filter(x=>x.documentId===d.id), pp=allExpenses().filter(e=>e.workerId&&e.documentId===d.id);
-    if(!dd.length&&!pp.length) return "";
+    const mats=allExpenses().filter(e=>!e.workerId&&e.documentId===d.id);
+    if(!dd.length&&!pp.length&&!mats.length) return "";
     const ws=[...new Set(dd.map(x=>x.workerId).concat(pp.map(e=>e.workerId)))];
-    return `<div class="card"><h2>Crew on this invoice</h2>
-      <table class="tbl"><tr><td class="sub">Painter</td><td class="sub r">Days</td><td class="sub r">Earned</td><td class="sub r">Paid</td></tr>
-      ${ws.map(wid=>{ const a=dd.filter(x=>x.workerId===wid), b=pp.filter(e=>e.workerId===wid); return `<tr><td>${esc((S.workers[wid]?.name||"").split(" ")[0])}</td><td class="r">${Math.round(a.reduce((s,x)=>s+x.portion,0)*100)/100}</td><td class="r">${money(a.reduce((s,x)=>s+x.amount,0))}</td><td class="r">${money(b.reduce((s,e)=>s+e.amount,0))}</td></tr>`; }).join("")}</table>
-      <p class="sub" style="margin:0">From Team. Crew pay is your cost, so it doesn't change this invoice.</p></div>`; })()}
+    // crew cost per painter: what they earned for logged days, or what they were paid if more
+    const cost=wid=>{ const a=r2(dd.filter(x=>x.workerId===wid).reduce((s,x)=>s+x.amount,0)), b=r2(pp.filter(e=>e.workerId===wid).reduce((s,e)=>s+e.amount,0)); return Math.max(a,b); };
+    const crew=r2(ws.reduce((s,w)=>s+cost(w),0)), matTot=r2(mats.reduce((s,e)=>s+e.amount,0)), t=totals(d), mine=r2(t.total-crew-matTot);
+    return `<div class="card"><h2>Crew and your commission</h2>
+      ${ws.length?`<table class="tbl"><tr><td class="sub">Painter</td><td class="sub r">Days</td><td class="sub r">Earned</td><td class="sub r">Paid</td></tr>
+      ${ws.map(wid=>{ const a=dd.filter(x=>x.workerId===wid), b=pp.filter(e=>e.workerId===wid); return `<tr><td>${esc((S.workers[wid]?.name||"").split(" ")[0])}</td><td class="r">${Math.round(a.reduce((s,x)=>s+x.portion,0)*100)/100}</td><td class="r">${money(a.reduce((s,x)=>s+x.amount,0))}</td><td class="r">${money(b.reduce((s,e)=>s+e.amount,0))}</td></tr>`; }).join("")}</table>`:""}
+      <div class="totals"><div><span>Invoice total</span><span>${money(t.total)}</span></div>
+        ${crew?`<div><span>Crew</span><span>−${money(crew)}</span></div>`:""}
+        ${matTot?`<div><span>Materials and costs linked to this invoice</span><span>−${money(matTot)}</span></div>`:""}
+        <div class="big"><span>Your commission</span><span style="${mine<0?"color:var(--bad)":""}">${money(mine)}${t.total>0?` <span class="sub" style="font-weight:600">(${Math.round(mine/t.total*100)}%)</span>`:""}</span></div></div>
+      <p class="sub" style="margin:0">From Team and Expenses. Crew pay is your cost, so it doesn't change what the client owes.</p></div>`; })()}
   <div class="card"><h2>Notes &amp; terms</h2><textarea id="f-notes" data-k="notes" rows="9">${esc(d.notes)}</textarea></div>
   <div class="btns" style="justify-content:space-between">
     <div class="btns">
