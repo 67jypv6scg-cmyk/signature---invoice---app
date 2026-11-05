@@ -553,7 +553,7 @@ function onGlobalClick(e){
   if(a==="back") back();
   else if(a==="doc") openDoc(v);
   else if(a==="client") go("client",{id:v});
-  else if(a==="expense") openExpense(v);
+  else if(a==="expense") { if(S.expenses[v]?.workerId) openWorkerPayEdit(v); else openExpense(v); }
   else if(a==="go") go(v, el.dataset.p?JSON.parse(el.dataset.p):{});
   else if(a==="new-invoice") newDoc("invoice", v?S.clients[v]&&{id:v,...S.clients[v]}:null);
   else if(a==="new-quote") newDoc("quote", v?S.clients[v]&&{id:v,...S.clients[v]}:null);
@@ -562,6 +562,7 @@ function onGlobalClick(e){
   else if(a==="workday") openWorkDay(v);
   else if(a==="worker") go("worker",{id:v});
   else if(a==="pay-worker") openWorkerPay(v);
+  else if(a==="edit-pay") openWorkerPayEdit(v);
   else if(a==="scan-receipt") openExpense(null,true);
   else if(a==="tab") setTab(v);
 }
@@ -1615,6 +1616,10 @@ function renderTeam(app){
         <div class="big"><span>Still to pay the crew</span><span style="${j.owed>0?"color:var(--bad)":""}">${money(j.owed)}</span></div></div>
       ${clientInvoiceLine(j.clientId)}
     </div>`).join("")}`; })()}
+  ${(()=>{ const rp=allExpenses().filter(e=>e.workerId&&e.source==="team").sort((a,b)=>b.date.localeCompare(a.date)||b.id.localeCompare(a.id)).slice(0,10); if(!rp.length) return "";
+    return `<div class="sect"><h2>Recent payments</h2><span class="sub">Tap one to change it</span></div>
+    <div class="list">${rp.map(e=>`<button class="row" data-act="edit-pay" data-v="${e.id}"><span class="who">${esc(e.supplier)}</span><span class="amt" style="color:var(--ok)">${money(e.amount)}</span>
+      <span class="meta">${esc(e.method)}${e.clientId&&S.clients[e.clientId]?` · ${esc(S.clients[e.clientId].name)}`:""}${docNo(e.documentId)?` · ${esc(docNo(e.documentId))}`:""}</span><span class="meta r">${niceDate(e.date)}</span></button>`).join("")}</div>`; })()}
   <div class="sect"><h2>Recent days</h2></div>
   <div class="list">${recent.length?recent.map(x=>`<button class="row" data-act="workday" data-v="${x.id}"><span class="who">${esc(S.workers[x.workerId]?.name||"Painter")}</span><span class="amt">${money(x.amount)}</span>
     <span class="meta">${portionLabel(x.portion)}${x.clientId&&S.clients[x.clientId]?` · ${esc(S.clients[x.clientId].name)}`:""}</span><span class="meta r">${niceDate(x.date)}</span></button>`).join(""):`<div class="empty">Days you log show here.</div>`}</div>`;
@@ -1651,7 +1656,7 @@ function renderWorker(app){
     ${mk.map(k=>`<tr><td>${new Date(k+"-01T12:00").toLocaleDateString("en-GB",{month:"short",year:"numeric"})}</td><td class="r">${Math.round(months[k].days*100)/100}</td><td class="r">${money(months[k].earned)}</td><td class="r">${money(months[k].paid)}</td></tr>`).join("")}</table>
     <p class="sub" style="margin:0">Days and payments you log here count whatever their date, so you can fill in past weeks. Payments that came from your bank statement before ${niceDate(w.trackingFrom)} are left out, because those days were never logged. They're still in your expenses.</p></div>`:""}
   <div class="sect"><h2>Days and payments</h2></div>
-  <div class="list">${events.length?events.map(e=>`<button class="row" data-act="${e.kind==="day"?"workday":"expense"}" data-v="${e.id}"><span class="who">${esc(e.t)}</span><span class="amt" style="${e.kind==="pay"?"color:var(--ok)":""}">${e.kind==="pay"?"−":""}${money(e.amt)}</span><span class="meta">${e.kind==="day"?"Worked":"Payment"}</span><span class="meta r">${niceDate(e.date)}</span></button>`).join(""):`<div class="empty">Nothing logged yet.</div>`}</div>`;
+  <div class="list">${events.length?events.map(e=>`<button class="row" data-act="${e.kind==="day"?"workday":"edit-pay"}" data-v="${e.id}"><span class="who">${esc(e.t)}</span><span class="amt" style="${e.kind==="pay"?"color:var(--ok)":""}">${e.kind==="pay"?"−":""}${money(e.amt)}</span><span class="meta">${e.kind==="day"?"Worked":"Payment"}</span><span class="meta r">${niceDate(e.date)}</span></button>`).join(""):`<div class="empty">Nothing logged yet.</div>`}</div>`;
   $("#edit").onclick=()=>{ workerDraft={id:params.id,...w}; go("workerEdit"); };
 }
 
@@ -1805,14 +1810,22 @@ function splitInfo(p){
   const plan=allocatePay(p.workerId,+p.amount); if(plan.length<2) return "";
   return `<div class="info">This will be split: ${plan.map(x=>`${esc(jobName(x.clientId))}${docNo(defaultRef(p.workerId,x.clientId))?` (${esc(docNo(defaultRef(p.workerId,x.clientId)))})`:""} ${money(x.amount)}`).join(" · ")}</div>`;
 }
+function openWorkerPayEdit(expId){
+  const e=S.expenses[expId]; if(!e){ toast("That payment was deleted"); return; }
+  if(!e.workerId){ openExpense(expId); return; }
+  const inv=e.linkedPaymentId?Object.entries(S.invoices).find(([,i])=>(i.payments||[]).some(x=>x.id===e.linkedPaymentId)):null;
+  payDraft={editId:expId,workerId:e.workerId,date:e.date,amount:String(e.amount),how:e.method==="Paid by client"?"client":(e.method==="Cash"?"Cash":"Bank transfer"),
+    job:e.clientId||"",refDoc:e.documentId||"",documentId:inv?inv[0]:(e.documentId||""),notes:e.notes||"",linkedPaymentId:e.linkedPaymentId||""};
+  go("workerPay");
+}
 function renderWorkerPay(app){
   const p=payDraft, w=S.workers[p.workerId], s=workerStats(p.workerId), direct=p.how==="client";
   const owing=crewJobs().filter(r=>r.workerId===p.workerId&&r.owed>0).sort((a,b)=>a.first.localeCompare(b.first));
   const invs=docs("invoice").filter(i=>i.status!=="draft").map(i=>({...i,_t:totals(i)})).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,40);
   app.innerHTML=`
   <div class="top">${backBtn()}<button class="btn small primary" id="save">Save</button></div>
-  <h1 style="margin-bottom:6px">Pay ${esc(w?.name||"")}</h1>
-  <p class="sub" style="margin:0 0 12px">You owe ${money(s.owed)} for days logged.</p>
+  <h1 style="margin-bottom:6px">${p.editId?"Edit payment to":"Pay"} ${esc(w?.name||"")}</h1>
+  <p class="sub" style="margin:0 0 12px">${p.editId?"Change the date, amount, job or invoice, then Save.":`You owe ${money(s.owed)} for days logged.`}</p>
   ${owing.length?`<div class="card" style="gap:6px"><h2>Owed by job</h2>${owing.map(r=>`<div class="totals"><div><span>${esc(jobName(r.clientId))} · ${Math.round(r.days*100)/100} days</span><span>${money(r.owed)}</span></div></div>`).join("")}</div>`:""}
   <div class="card">
     <div class="grid2">
@@ -1820,21 +1833,22 @@ function renderWorkerPay(app){
       <label class="field"><span class="label">Amount £</span><input id="wp-amt" inputmode="decimal" value="${esc(p.amount)}"></label>
     </div>
     <div class="field"><span class="label">Who paid them</span>
-      <div class="seg2"><button data-how="Bank transfer" aria-pressed="${p.how==="Bank transfer"}">Me, by bank</button><button data-how="Cash" aria-pressed="${p.how==="Cash"}">Me, in cash</button><button data-how="client" aria-pressed="${direct}">The client</button></div></div>
-    ${direct?`<label class="field"><span class="label">Which invoice did the client pay towards?</span><select id="wp-doc"><option value="">Choose the invoice</option>${invs.map(i=>`<option value="${i.id}" ${p.documentId===i.id?"selected":""}>${esc(i.number)} · ${esc(i.client?.name||"")} · ${money(i._t.due)} left</option>`).join("")}</select></label>
+      ${p.editId&&direct?`<div class="sub">Paid by the client directly. To change that, delete this payment and record it again.</div>`:`<div class="seg2"><button data-how="Bank transfer" aria-pressed="${p.how==="Bank transfer"}">Me, by bank</button><button data-how="Cash" aria-pressed="${p.how==="Cash"}">Me, in cash</button>${p.editId?"":`<button data-how="client" aria-pressed="${direct}">The client</button>`}</div>`}</div>
+    ${direct?`<label class="field"><span class="label">Which invoice did the client pay towards?</span><select id="wp-doc" ${p.editId?"disabled":""}><option value="">Choose the invoice</option>${invs.map(i=>`<option value="${i.id}" ${p.documentId===i.id?"selected":""}>${esc(i.number)} · ${esc(i.client?.name||"")} · ${money(i._t.due)} left</option>`).join("")}</select></label>
     <div class="info">This records the money twice, the way your accounts need it: as a payment from the client on that invoice (your income), and as a payment to ${esc(w?.name?.split(" ")[0]||"them")} (your subcontractor cost). Check this treatment with your accountant.</div>`
     :`<label class="field"><span class="label">Which job is this for?</span><select id="wp-job">
-        <option value="auto" ${p.job==="auto"?"selected":""}>Whatever's owed, oldest job first</option>
+        ${p.editId?"":`<option value="auto" ${p.job==="auto"?"selected":""}>Whatever's owed, oldest job first</option>`}
         ${owing.map(r=>`<option value="${esc(r.clientId)}" ${p.job===r.clientId?"selected":""}>${esc(jobName(r.clientId))} · ${money(r.owed)} owed</option>`).join("")}
         ${Object.entries(S.clients).filter(([id])=>!owing.some(r=>r.clientId===id)).sort((a,b)=>a[1].name.localeCompare(b[1].name)).map(([id,c])=>`<option value="${id}" ${p.job===id?"selected":""}>${esc(c.name)}</option>`).join("")}
         <option value="" ${p.job===""?"selected":""}>Not linked to a job</option></select></label>
       ${p.job&&p.job!=="auto"?(()=>{ const ivs=docs("invoice").filter(i=>i.clientId===p.job).sort((a,b)=>b.date.localeCompare(a.date)); return `<label class="field"><span class="label">Invoice number (for reference, it doesn't change the invoice)</span><select id="wp-ref"><option value="">No invoice yet</option>${ivs.map(i=>`<option value="${i.id}" ${p.refDoc===i.id?"selected":""}>${esc(i.number)} · ${ukDate(i.date)} · ${money(totals(i).total)}</option>`).join("")}</select></label>`; })():""}
       <div id="wp-split">${splitInfo(p)}</div>`}
     <label class="field"><span class="label">Notes</span><input id="wp-notes" value="${esc(p.notes)}" placeholder="e.g. Week ending Friday"></label>
-  </div>`;
+  </div>
+  ${p.editId?`<div class="btns" style="justify-content:flex-end"><button class="btn danger" id="del">Delete payment</button></div>`:""}`;
   const keep=()=>{ p.date=$("#wp-date").value; p.amount=$("#wp-amt").value; p.notes=$("#wp-notes").value; const dd=$("#wp-doc"); if(dd) p.documentId=dd.value; const jj=$("#wp-job"); if(jj) p.job=jj.value; const rf=$("#wp-ref"); if(rf) p.refDoc=rf.value; };
   app.querySelectorAll("[data-how]").forEach(b=>b.onclick=()=>{ keep(); p.how=b.dataset.how; rerenderKeep(); });
-  const jj=$("#wp-job"); if(jj) jj.onchange=()=>{ keep(); p.refDoc=defaultRef(p.workerId,p.job); const r=owing.find(x=>x.clientId===p.job); if(r) p.amount=r.owed.toFixed(2); else if(p.job==="auto"&&s.owed>0) p.amount=s.owed.toFixed(2); rerenderKeep(); };
+  const jj=$("#wp-job"); if(jj) jj.onchange=()=>{ keep(); p.refDoc=defaultRef(p.workerId,p.job); if(p.editId){ rerenderKeep(); return; } const r=owing.find(x=>x.clientId===p.job); if(r) p.amount=r.owed.toFixed(2); else if(p.job==="auto"&&s.owed>0) p.amount=s.owed.toFixed(2); rerenderKeep(); };
   // update the split preview in place: redrawing the screen here would swallow a tap on Save
   $("#wp-amt").oninput=()=>{ p.amount=$("#wp-amt").value; const sp=$("#wp-split"); if(sp) sp.innerHTML=splitInfo(p); };
   $("#save").onclick=async()=>{ keep(); const amt=r2(p.amount); const sv=$("#save"); if(sv.disabled) return;
@@ -1842,6 +1856,19 @@ function renderWorkerPay(app){
     if(direct&&!p.documentId){ toast("Choose the invoice the client paid towards"); return; }
     sv.disabled=true; sv.textContent="Saving…";
     try{
+      if(p.editId){
+        const old=S.expenses[p.editId];
+        const upd={...old,date:p.date,amount:amt,notes:p.notes};
+        if(!direct){ upd.method=p.how; upd.clientId=p.job||""; upd.documentId=p.refDoc||""; }
+        await put("expenses",p.editId,upd);
+        if(direct&&old.linkedPaymentId){ // keep the client's invoice in step
+          const hit=Object.entries(S.invoices).find(([,i])=>(i.payments||[]).some(x=>x.id===old.linkedPaymentId));
+          if(hit){ const [iid,i0]=hit; const inv=JSON.parse(JSON.stringify(i0));
+            inv.payments=inv.payments.map(x=>x.id===old.linkedPaymentId?{...x,date:p.date,amount:amt}:x);
+            (inv.history=inv.history||[]).push({at:new Date().toISOString(),text:`Payment changed to ${money(amt)} on ${ukDate(p.date)} (paid by the client straight to ${w.name})`});
+            await put("invoices",iid,inv); } }
+        toast("Payment updated"); back(); return;
+      }
       if(direct){
         const inv=JSON.parse(JSON.stringify(S.invoices[p.documentId])); const clientId=inv.clientId||"";
         const linked=uid("p"); inv.payments=(inv.payments||[]).concat([{id:linked,date:p.date,amount:amt,method:"Paid direct to subcontractor",note:`Paid by the client straight to ${w.name}`}]);
@@ -1855,6 +1882,7 @@ function renderWorkerPay(app){
       }
       toast("Payment recorded"); back();
     }catch(e){ sv.disabled=false; sv.textContent="Save"; toast("Couldn't save: "+(e?.message||"try again")); } };
+  const dl=$("#del"); if(dl) armDelete(dl,"Delete payment",async()=>{ const e=S.expenses[p.editId]; await del("expenses",p.editId); if(e) await unlinkClientPayment(e); toast("Payment deleted"); back(); });
 }
 async function unlinkClientPayment(e){
   if(!e.linkedPaymentId) return;
