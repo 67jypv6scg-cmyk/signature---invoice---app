@@ -81,6 +81,11 @@ button.stat:hover{border-color:var(--accent)}
 .wk-card .owed{font-weight:700;font-size:1.25rem;font-variant-numeric:tabular-nums}
 .wk-nums{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;font-size:.86rem;color:var(--muted)}
 .wk-nums b{display:block;color:var(--fg);font-size:1rem;font-variant-numeric:tabular-nums}
+.wk-tap{background:none;border:1px solid var(--line);border-radius:10px;padding:10px;text-align:left;font:inherit;cursor:pointer;width:100%}
+.wk-tap:active{background:var(--bg)}
+.wk-more{grid-column:1/-1;color:var(--accent);font-weight:700;font-size:.88rem}
+.wk-day{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid var(--line);font-variant-numeric:tabular-nums}
+.wk-day:first-of-type{border-top:0}
 .who-pick{display:flex;flex-wrap:wrap;gap:8px}
 .who-pick label{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:99px;padding:8px 14px;background:var(--bg)}
 .who-pick input{width:auto}
@@ -479,7 +484,7 @@ async function uploadReceipt(blob,type,expId){
 }
 async function removeReceipt(path){ try{ await sb.storage.from(BUCKET).remove([path]); }catch(e){} }
 
-const LIVE = new Set(["home","clients","client","quotes","invoices","more","income","quarter","expenses","items","team","worker"]);
+const LIVE = new Set(["home","clients","client","quotes","invoices","more","income","quarter","expenses","items","team","worker","week"]);
 function liveRefresh(){ if(!LIVE.has(screen)) return; const y=scrollY; render(); scrollTo(0,y); }
 // pick up changes made on another device when the app comes back to the front
 document.addEventListener("visibilitychange",async()=>{
@@ -563,6 +568,7 @@ function onGlobalClick(e){
   else if(a==="worker") go("worker",{id:v});
   else if(a==="pay-worker") openWorkerPay(v);
   else if(a==="edit-pay") openWorkerPayEdit(v);
+  else if(a==="week") go("week",{wid:v||"all",ws:el.dataset.w||weekStartISO(todayISO())});
   else if(a==="scan-receipt") openExpense(null,true);
   else if(a==="tab") setTab(v);
 }
@@ -1603,7 +1609,7 @@ function renderTeam(app){
   ${ws.length?ws.map(([id,w])=>{ const s=workerStats(id); return `
   <div class="wk-card">
     <button class="hd link" data-act="worker" data-v="${id}" style="color:inherit;text-align:left"><b>${esc(w.name)}</b><span class="sub">${money(w.dayRate)} a day ›</span></button>
-    <div class="wk-nums"><div>This week<b>${fmtDays(s.week)}</b></div><div>Earned this week<b>${money(s.weekAmt)}</b></div><div>Paid this week<b>${money((s.weeks[s.weeks.length-1]||{}).paid||0)}</b></div></div>
+    <button class="wk-nums wk-tap" data-act="week" data-v="${id}" aria-label="See this week's breakdown"><div>This week<b>${fmtDays(s.week)}</b></div><div>Earned this week<b>${money(s.weekAmt)}</b></div><div>Paid this week<b>${money((s.weeks[s.weeks.length-1]||{}).paid||0)}</b></div><span class="wk-more">See the week ›</span></button>
     <div class="hd" style="border-top:1px solid var(--line);padding-top:10px"><span><span class="sub">Total to pay now</span>${s.owed!==s.weekAmt&&s.weeks.length>1?`<br><span class="sub" style="font-size:.8rem">includes earlier weeks not yet paid</span>`:""}</span><span class="owed" style="${s.owed>0?"color:var(--bad)":""}">${money(s.owed)}</span></div>
     <div class="btns"><button class="btn primary" data-act="new-workday" data-v="${id}">+ Log a day</button><button class="btn" data-act="pay-worker" data-v="${id}">Pay ${esc(w.name.split(" ")[0])}</button></div>
   </div>`; }).join(""):`<div class="list"><div class="empty">No painters added yet.</div></div>`}
@@ -1650,7 +1656,7 @@ function renderWorker(app){
   <div class="btns" style="margin-bottom:6px"><button class="btn primary" data-act="new-workday" data-v="${params.id}">+ Log a day</button><button class="btn" data-act="pay-worker" data-v="${params.id}">Record a payment</button></div>
   ${(()=>{ const rows=crewJobs().filter(r=>r.workerId===params.id).sort((a,b)=>b.last.localeCompare(a.last)); return rows.length?`<div class="sect"><h2>By job</h2></div><div class="card">${jobCrewTable(rows,false)}</div>`:""; })()}
   ${s.weeks.length?`<div class="sect"><h2>Week by week</h2><span class="sub">Mon–Sun</span></div><div class="card"><table class="tbl"><tr><td class="sub">Week</td><td class="sub r">Days</td><td class="sub r">Earned</td><td class="sub r">Paid</td><td class="sub r">Owed</td></tr>
-    ${s.weeks.slice().reverse().slice(0,12).map(x=>`<tr><td>${new Date(x.start+"T12:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})}–${new Date(x.end+"T12:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})}</td><td class="r">${Math.round(x.days*100)/100}</td><td class="r">${money(x.earned)}</td><td class="r">${money(x.paid)}</td><td class="r" style="${x.balance>0?"color:var(--bad);font-weight:700":""}">${money(x.balance)}</td></tr>`).join("")}</table>
+    ${s.weeks.slice().reverse().slice(0,12).map(x=>`<tr data-act="week" data-v="${params.id}" data-w="${x.start}" style="cursor:pointer"><td>${new Date(x.start+"T12:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})}–${new Date(x.end+"T12:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})}</td><td class="r">${Math.round(x.days*100)/100}</td><td class="r">${money(x.earned)}</td><td class="r">${money(x.paid)}</td><td class="r" style="${x.balance>0?"color:var(--bad);font-weight:700":""}">${money(x.balance)} ›</td></tr>`).join("")}</table>
     <p class="sub" style="margin:0">Owed is the running total at the end of each week, so anything unpaid carries into the next week.</p></div>`:""}
   ${mk.length?`<div class="sect"><h2>By month</h2></div><div class="card"><table class="tbl"><tr><td class="sub">Month</td><td class="sub r">Days</td><td class="sub r">Earned</td><td class="sub r">Paid</td></tr>
     ${mk.map(k=>`<tr><td>${new Date(k+"-01T12:00").toLocaleDateString("en-GB",{month:"short",year:"numeric"})}</td><td class="r">${Math.round(months[k].days*100)/100}</td><td class="r">${money(months[k].earned)}</td><td class="r">${money(months[k].paid)}</td></tr>`).join("")}</table>
@@ -1884,6 +1890,59 @@ function renderWorkerPay(app){
     }catch(e){ sv.disabled=false; sv.textContent="Save"; toast("Couldn't save: "+(e?.message||"try again")); } };
   const dl=$("#del"); if(dl) armDelete(dl,"Delete payment",async()=>{ const e=S.expenses[p.editId]; await del("expenses",p.editId); if(e) await unlinkClientPayment(e); toast("Payment deleted"); back(); });
 }
+
+/* ---- one week (Mon–Sun) in detail: days by job, payments, and a per-job summary ---- */
+function renderWeek(app){
+  const ws=params.ws, we=addDays(ws,6), wid=params.wid||"all";
+  const who=wid==="all"?activeWorkers().map(([k])=>k):[wid];
+  const inWeek=d=>d>=ws&&d<=we;
+  const days=Object.entries(S.workDays).map(([id,x])=>({id,...x})).filter(x=>who.includes(x.workerId)&&inWeek(x.date)).sort((a,b)=>a.date.localeCompare(b.date)||a.workerId.localeCompare(b.workerId));
+  const pays=allExpenses().filter(e=>who.includes(e.workerId)&&inWeek(e.date)&&countsPay(e,S.workers[e.workerId])).sort((a,b)=>a.date.localeCompare(b.date));
+  const earned=r2(days.reduce((a,x)=>a+x.amount,0)), paid=r2(pays.reduce((a,x)=>a+x.amount,0));
+  const owedNow=r2(who.reduce((a,w)=>a+workerStats(w).owed,0));
+  // balance owed at the end of this week (all weeks up to and including it)
+  const endBal=r2(who.reduce((a,w)=>{ const wk=workerStats(w).weeks.filter(x=>x.start<=ws).pop(); return a+(wk?wk.balance:0); },0));
+  // per job for this week
+  const jobs={};
+  const J=(cid)=>jobs[cid||""]=jobs[cid||""]||{clientId:cid||"",days:0,earned:0,paid:0,docs:new Set(),byW:{}};
+  days.forEach(x=>{ const j=J(x.clientId); j.days+=x.portion; j.earned+=x.amount; if(x.documentId) j.docs.add(x.documentId); const b=j.byW[x.workerId]=j.byW[x.workerId]||{days:0,earned:0,paid:0}; b.days+=x.portion; b.earned+=x.amount; });
+  pays.forEach(e=>{ const j=J(e.clientId); j.paid+=e.amount; if(e.documentId) j.docs.add(e.documentId); const b=j.byW[e.workerId]=j.byW[e.workerId]||{days:0,earned:0,paid:0}; b.paid+=e.amount; });
+  const jl=Object.values(jobs).sort((a,b)=>b.earned-a.earned);
+  const fmt=iso=>new Date(iso+"T12:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"});
+  const first=n=>(S.workers[n]?.name||"").split(" ")[0];
+  const opts=[["all","Both painters"],...activeWorkers().map(([k,w])=>[k,w.name])];
+  app.innerHTML=`
+  <div class="top">${backBtn()}</div>
+  <h1 style="margin-bottom:8px">Week breakdown</h1>
+  <div class="seg2" style="grid-template-columns:repeat(${opts.length},minmax(0,1fr));margin-bottom:10px">${opts.map(([k,l])=>`<button data-who="${k}" aria-pressed="${wid===k}">${esc(l.split(" ")[0])}</button>`).join("")}</div>
+  <div class="wk-nav" style="margin-bottom:12px"><button class="btn small" id="w-prev" aria-label="Previous week">‹</button><b>${new Date(ws+"T12:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})} – ${new Date(we+"T12:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}</b><button class="btn small" id="w-next" aria-label="Next week">›</button></div>
+  <div class="grid3" style="margin-bottom:6px">
+    <div class="stat"><span class="label">Days</span><b>${fmtDays(days.reduce((a,x)=>a+x.portion,0))}</b></div>
+    <div class="stat"><span class="label">Earned</span><b>${money(earned)}</b></div>
+    <div class="stat"><span class="label">Paid this week</span><b>${money(paid)}</b></div>
+  </div>
+  <p class="sub" style="margin:0 0 14px">Still owed at the end of this week: <b style="${endBal>0?"color:var(--bad)":""}">${money(endBal)}</b>${endBal!==earned-paid?" (includes earlier weeks)":""} · owed right now: <b>${money(owedNow)}</b></p>
+
+  <div class="sect"><h2>By job this week</h2></div>
+  ${jl.length?jl.map(j=>`<div class="card" style="gap:8px">
+    <div class="hd" style="display:flex;justify-content:space-between;gap:8px"><b>${esc(jobName(j.clientId))}</b><span class="sub">${esc([...j.docs].map(docNo).filter(Boolean).join(", "))}</span></div>
+    <table class="tbl"><tr><td class="sub">Painter</td><td class="sub r">Days</td><td class="sub r">Earned</td><td class="sub r">Paid</td></tr>
+    ${Object.entries(j.byW).map(([w,b])=>`<tr><td>${esc(first(w))}</td><td class="r">${Math.round(b.days*100)/100}</td><td class="r">${money(b.earned)}</td><td class="r">${money(b.paid)}</td></tr>`).join("")}</table>
+    <div class="totals"><div><span>Earned on this job this week</span><span>${money(j.earned)}</span></div><div><span>Paid against this job this week</span><span>${money(j.paid)}</span></div><div class="big"><span>Left to pay for this week</span><span style="${j.earned-j.paid>0.004?"color:var(--bad)":""}">${money(Math.max(0,j.earned-j.paid))}</span></div></div>
+  </div>`).join(""):`<div class="list"><div class="empty">Nothing logged this week.</div></div>`}
+
+  <div class="sect"><h2>Days worked</h2><span class="sub">Tap to change</span></div>
+  <div class="list">${days.length?days.map(x=>`<button class="row" data-act="workday" data-v="${x.id}"><span class="who">${esc(wid==="all"?first(x.workerId)+" · ":"")}${fmt(x.date)}</span><span class="amt">${money(x.amount)}</span>
+    <span class="meta">${portionLabel(x.portion)} · ${esc(jobName(x.clientId))}${docNo(x.documentId)?` · ${esc(docNo(x.documentId))}`:""}</span><span class="meta r">${esc(x.notes||"")}</span></button>`).join(""):`<div class="empty">No days logged this week.</div>`}</div>
+
+  <div class="sect"><h2>Payments this week</h2><span class="sub">Tap to change</span></div>
+  <div class="list">${pays.length?pays.map(e=>`<button class="row" data-act="edit-pay" data-v="${e.id}"><span class="who">${esc(wid==="all"?first(e.workerId)+" · ":"")}${fmt(e.date)}</span><span class="amt" style="color:var(--ok)">${money(e.amount)}</span>
+    <span class="meta">${esc(e.method)} · ${esc(jobName(e.clientId))}${docNo(e.documentId)?` · ${esc(docNo(e.documentId))}`:""}</span><span class="meta r">${esc(e.notes||"")}</span></button>`).join(""):`<div class="empty">No payments dated this week.</div>`}</div>
+  <div class="btns" style="margin-top:12px">${wid!=="all"?`<button class="btn primary" data-act="pay-worker" data-v="${wid}">Pay ${esc(first(wid))}</button>`:""}<button class="btn" data-act="new-workday" data-v="${wid==="all"?"":wid}">+ Log days</button></div>`;
+  app.querySelectorAll("[data-who]").forEach(b=>b.onclick=()=>{ params.wid=b.dataset.who; render(); });
+  $("#w-prev").onclick=()=>{ params.ws=addDays(ws,-7); render(); };
+  $("#w-next").onclick=()=>{ params.ws=addDays(ws,7); render(); };
+}
 async function unlinkClientPayment(e){
   if(!e.linkedPaymentId) return;
   const hit=Object.entries(S.invoices).find(([,i])=>(i.payments||[]).some(p=>p.id===e.linkedPaymentId)); if(!hit) return;
@@ -1921,7 +1980,7 @@ function renderItemEdit(app){
   const d=$("#del"); if(d) armDelete(d,"Delete",async()=>{ await del("items",it.id); toast("Item deleted"); back(); });
 }
 
-const SCREENS={team:renderTeam,worker:renderWorker,workerEdit:renderWorkerEdit,workDay:renderWorkDay,workerPay:renderWorkerPay,items:renderItems,itemEdit:renderItemEdit,home:renderHome,clients:renderClients,client:renderClient,clientEdit:renderClientEdit,quotes:a=>docList(a,"quote"),invoices:a=>docList(a,"invoice"),
+const SCREENS={week:renderWeek,team:renderTeam,worker:renderWorker,workerEdit:renderWorkerEdit,workDay:renderWorkDay,workerPay:renderWorkerPay,items:renderItems,itemEdit:renderItemEdit,home:renderHome,clients:renderClients,client:renderClient,clientEdit:renderClientEdit,quotes:a=>docList(a,"quote"),invoices:a=>docList(a,"invoice"),
   doc:renderDoc,preview:renderPreview,more:renderMore,income:renderIncome,quarter:renderQuarter,expenses:renderExpenses,expense:renderExpense,settings:renderSettings,backup:renderBackup};
 document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>{ ui.q=""; setTab(b.dataset.tab); });
 $("#app").addEventListener("click",onGlobalClick);
