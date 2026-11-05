@@ -39,6 +39,8 @@
   --info:#8db4ea; --info-soft:#1d2a3d; --draft:#9aaaa5; --draft-soft:#26302d;
   --bar-in:#4fb8a2; --bar-out:#e0a85e; color-scheme:dark}
 *{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+.sheet,.sheet *{-webkit-text-size-adjust:none;text-size-adjust:none}
 body{background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:15px;line-height:1.45}
 .wrap{max-width:760px;margin:0 auto;padding-inline:16px;padding-block:14px 120px}
 h1,h2,h3{margin:0;text-wrap:balance}
@@ -234,7 +236,7 @@ const DEFAULT_SETTINGS = {
   bizName:"Signature Bespoke decorating", owner:"Bradley Loubser",
   address:"", phone:"", email:"",
   payee:"", account:"", sortCode:"",
-  invPrefix:"INV", quotePrefix:"QUO", vatOn:false, vatRate:20, dueDays:0, quoteDays:30,
+  invPrefix:"INV", quotePrefix:"QUO", vatOn:false, vatRate:20, dueDays:0, quoteDays:30, depositOn:true, depositPct:20,
   quarters:"standard", brandColor:"#00695c", logo:"/logo.png",
   notes:"Please note this estimate is labour only\nMaterials are for the clients account\nA 20% deposit will be required prior to commencement of works\nPayment for work completed is to be paid each Friday with the final balance due on completion of scheduled works\n\nTwo coats will be applied to all surfaces\nDecorating sheets and polythene sheets will be used to protect surfaces and furniture\nOnly trade quality paint will be used",
   thanks:"Thanks for your business!"
@@ -293,7 +295,10 @@ function totals(inv){
   const vat = inv.vatOn ? sub*(Number(inv.vatRate)||0)/100 : 0;
   const total = r2(sub+vat);
   const paid = inv.type==="quote" ? 0 : r2((inv.payments||[]).reduce((a,p)=>a+(Number(p.amount)||0),0));
-  return {sub:r2(sub), vat:r2(vat), total, paid, due: r2(Math.max(0,total-paid))};
+  const depPct = inv.depositOn ? (Number(inv.depositPct)||0) : 0;
+  const deposit = r2(total*depPct/100);
+  return {sub:r2(sub), vat:r2(vat), total, paid, due: r2(Math.max(0,total-paid)), depPct, deposit,
+    depositDue: r2(Math.max(0,deposit-paid)), depositPaid: deposit>0 && paid>=deposit-0.004};
 }
 function statusOf(inv){
   if(inv.type==="quote"){
@@ -356,13 +361,13 @@ const nn = v => (v===""||v==null) ? null : v;
 function payId(docId,p){ const id=p.id||uid("p"); return id.length<6 ? `${docId}__${id}` : id; }
 function rowToDoc(r,pays){
   return norm({type:r.type, number:r.number, date:r.date, due:r.due||"", po:r.po||"", status:r.status, clientId:r.client_id||"",
-    client:r.client||{}, items:r.items||[], vatOn:!!r.vat_on, vatRate:+r.vat_rate, notes:r.notes||"", history:r.history||[],
+    client:r.client||{}, items:r.items||[], vatOn:!!r.vat_on, vatRate:+r.vat_rate, depositOn:!!r.deposit_on, depositPct:+r.deposit_pct, notes:r.notes||"", history:r.history||[],
     imported:!!r.imported, fromQuote:r.from_quote||"", convertedTo:r.converted_to||"", updated:r.updated_at,
     payments:(pays||[]).sort((a,b)=>a.date.localeCompare(b.date)).map(p=>({id:p.id,date:p.date,amount:+p.amount,method:p.method||"",note:p.note||""}))});
 }
 function docToRow(id,i){
   return {id, type:i.type, number:i.number, date:i.date, due:nn(i.due), po:i.po||"", status:i.status||"draft",
-    client_id:nn(i.clientId), client:i.client||{}, items:i.items||[], vat_on:!!i.vatOn, vat_rate:Number(i.vatRate)||20,
+    client_id:nn(i.clientId), client:i.client||{}, items:i.items||[], vat_on:!!i.vatOn, vat_rate:Number(i.vatRate)||20, deposit_on:!!i.depositOn, deposit_pct:Math.min(100,Math.max(0,Number(i.depositPct)||0)),
     notes:i.notes||"", history:i.history||[], imported:!!i.imported, from_quote:nn(i.fromQuote), converted_to:nn(i.convertedTo)};
 }
 const rowToClient = r => ({name:r.name, address:r.address||"", phone:r.phone||"", email:r.email||"", notes:r.notes||"", source:r.source||"", ...(r.history?{history:r.history}:{})});
@@ -692,7 +697,7 @@ function blankDoc(type,client){
   const st=S.settings, date=todayISO(), days = type==="quote"?+st.quoteDays:+st.dueDays;
   return {id:uid(type==="quote"?"quo_":"inv_"), isNew:true, type, number:nextNumber(type), date, due: days>0?addDays(date,days):"",
     status:"draft", clientId:client?.id||"", client:client?{name:client.name,address:client.address||"",phone:client.phone||"",email:client.email||""}:{name:"",address:"",phone:"",email:""},
-    items:[{desc:"",rate:"",qty:1}], vatOn:!!st.vatOn, vatRate:st.vatRate, notes:st.notes, payments:[]};
+    items:[{desc:"",rate:"",qty:1}], vatOn:!!st.vatOn, vatRate:st.vatRate, depositOn:!!st.depositOn, depositPct:+st.depositPct||20, notes:st.notes, payments:[]};
 }
 function newDoc(type,client){ draft=blankDoc(type,client); go("doc"); }
 function openDoc(id){ draft={id,...JSON.parse(JSON.stringify(S.invoices[id]))}; norm(draft); go("doc"); }
@@ -752,6 +757,7 @@ function renderDoc(app){
     </div>`).join("")}
     <div class="btns"><button class="btn small" id="addItem">+ Add line</button>${Object.keys(S.items).length?`<select id="pickItem" style="width:auto;max-width:100%"><option value="">+ Add a saved item…</option>${Object.entries(S.items).sort((a,b)=>a[1].desc.localeCompare(b[1].desc)).map(([id,it])=>`<option value="${id}">${esc(it.desc.split("\n")[0])} · ${money(it.rate)}</option>`).join("")}</select>`:""}</div>
     <label class="check"><input type="checkbox" id="f-vat" data-k="vatOn" ${d.vatOn?"checked":""}> Charge VAT at <input id="f-vatrate" data-k="vatRate" inputmode="decimal" style="width:64px" value="${esc(d.vatRate)}">%</label>
+    <label class="check"><input type="checkbox" id="f-dep" data-k="depositOn" ${d.depositOn?"checked":""}> Ask for a deposit of <input id="f-deppct" data-k="depositPct" inputmode="decimal" style="width:64px" value="${esc(d.depositPct??20)}">%</label>
     <div class="totals" id="totals"></div>
   </div>
   ${isQ?"":`
@@ -816,6 +822,7 @@ function drawTotals(){
   $("#totals").innerHTML=`<div><span>Subtotal</span><span>${money(t.sub)}</span></div>
     ${draft.vatOn?`<div><span>VAT (${esc(draft.vatRate)}%)</span><span>${money(t.vat)}</span></div>`:""}
     <div${isQ?' class="big"':''}><span>Total</span><span>${money(t.total)}</span></div>
+    ${t.deposit>0?`<div><span>Deposit (${esc(t.depPct)}%)${!isQ&&t.depositPaid?" · paid":""}</span><span>${money(t.deposit)}</span></div>`:""}
     ${!isQ&&t.paid?`<div><span>Received</span><span>−${money(t.paid)}</span></div>`:""}
     ${isQ?"":`<div class="big"><span>Balance due</span><span>${money(t.due)}</span></div>`}`;
 }
@@ -866,6 +873,7 @@ function sheetHTML(inv){
         ${inv.po?`<div class="k">PO number</div><div class="v">${esc(inv.po)}</div>`:""}
         ${inv.due?`<div class="k">${isQ?"Valid until":"Due date"}</div><div class="v">${ukDate(inv.due)}</div>`:""}
         <div class="k">${isQ?"Total":"Balance due"}</div><div class="v">GBP ${money(showDue)}</div>
+        ${t.deposit>0&&(isQ||!t.depositPaid)?`<div class="k">Deposit due (${esc(t.depPct)}%)</div><div class="v">GBP ${money(isQ?t.deposit:t.depositDue)}</div>`:""}
       </div>
     </div>
     <div class="sh-bill brk"><div class="sh-k">${isQ?"Quote for":"Bill to"}</div><div class="name">${esc(c.name)}</div>
@@ -883,6 +891,7 @@ function sheetHTML(inv){
         <div class="tr"><span class="sh-k">VAT (${esc(inv.vatRate||20)}%)</span><span>${inv.vatOn?money(t.vat):"inc "+money(0)}</span></div>
         <div class="rule"></div>
         <div class="tr"><span class="sh-k">Total</span><span>${money(t.total)}</span></div>
+        ${t.deposit>0?`<div class="tr"><span class="sh-k">Deposit (${esc(t.depPct)}%)${!isQ&&t.depositPaid?" · paid":""}</span><span>${money(t.deposit)}</span></div>`:""}
         ${!isQ&&t.paid?`<div class="tr"><span class="sh-k">Paid</span><span>−${money(t.paid)}</span></div>`:""}
         <div class="rule"></div>
         <div class="due"><span class="sh-k">${isQ?"Quote total":"Balance due"}</span><b>GBP ${money(showDue)}</b></div>
@@ -898,8 +907,11 @@ function sendMessage(d){
   const st=S.settings, t=totals(d), isQ=d.type==="quote", first=(d.client.name||"").split(/[ &]/)[0];
   const me=(st.owner||"").split(" ")[0];
   const lines=[`Hi ${first||"there"},`,""];
-  if(isQ) lines.push(`Please find attached quote ${d.number} for ${money(t.total)}${d.due?`, valid until ${ukDate(d.due)}`:""}.`,"","Let me know if you'd like to go ahead and we'll get you booked in.");
+  if(isQ){ lines.push(`Please find attached quote ${d.number} for ${money(t.total)}${d.due?`, valid until ${ukDate(d.due)}`:""}.`);
+    if(t.deposit>0) lines.push(`A ${t.depPct}% deposit of ${money(t.deposit)} is needed to book the work in.`);
+    lines.push("","Let me know if you'd like to go ahead and we'll get you booked in."); }
   else { lines.push(`Please find attached invoice ${d.number}${d.po?` (your ref ${d.po})`:""} for ${money(t.total)}.`); if(t.paid>0) lines.push(`With ${money(t.paid)} already received, the balance due is ${money(t.due)}.`);
+    if(t.deposit>0&&!t.depositPaid) lines.push(`A ${t.depPct}% deposit of ${money(t.depositDue)} is due before work starts.`);
     lines.push("","Payment details:",`Payee: ${st.payee}`,`Account number: ${st.account}`,`Sort code: ${st.sortCode}`,`Reference: ${d.number}`); }
   lines.push("","Thank you,",me,st.bizName);
   return lines.join("\n");
@@ -1441,6 +1453,10 @@ function renderSettings(app){
       <option value="standard" ${s.quarters==="standard"?"selected":""}>Standard: 6 Apr, 6 Jul, 6 Oct, 6 Jan</option>
       <option value="calendar" ${s.quarters==="calendar"?"selected":""}>Calendar: 1 Apr, 1 Jul, 1 Oct, 1 Jan</option></select></label>
     <label class="check"><input type="checkbox" id="s-vatOn" data-s="vatOn" ${s.vatOn?"checked":""}> I'm VAT registered. Add VAT at ${f("vatRate","","inputmode=\"decimal\" style=\"width:64px\"").replace(/<label class="field"><span class="label"><\/span>|<\/label>/g,"")}% to new documents</label>
+  </div>
+  <div class="card"><h2>Deposit</h2>
+    <label class="check"><input type="checkbox" id="s-depositOn" data-s="depositOn" ${s.depositOn?"checked":""}> Ask for a deposit on new quotes and invoices</label>
+    ${f("depositPct","Deposit %",'inputmode="decimal" style="max-width:120px"')}
   </div>
   <div class="card"><h2>Default notes &amp; terms</h2>
     <textarea id="s-notes" data-s="notes" rows="9">${esc(s.notes)}</textarea>
