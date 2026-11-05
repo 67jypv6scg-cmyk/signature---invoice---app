@@ -81,6 +81,15 @@ button.stat:hover{border-color:var(--accent)}
 .wk-card .owed{font-weight:700;font-size:1.25rem;font-variant-numeric:tabular-nums}
 .wk-nums{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;font-size:.86rem;color:var(--muted)}
 .wk-nums b{display:block;color:var(--fg);font-size:1rem;font-variant-numeric:tabular-nums}
+.cp-forecast{border:2px dashed var(--line);border-radius:10px;padding:12px;display:grid;gap:8px}
+.cp-actual{border:1px solid var(--line);border-radius:10px;padding:12px;display:grid;gap:8px;background:var(--bg)}
+.cp-tag{justify-self:start;font-size:.72rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--warn);border:1px dashed var(--warn);border-radius:99px;padding:3px 10px}
+.cp-tag.solid{color:var(--ok);border:1px solid var(--ok)}
+.cp-row{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) minmax(0,1.2fr) auto;gap:6px;align-items:center}
+.cp-in{display:flex;align-items:center;gap:4px;font-size:.85rem;color:var(--muted)}
+.cp-in input{min-width:0;width:100%}
+.cp-proj{margin-top:4px}
+.cp-keep{border-left:4px solid var(--accent);padding:8px 10px;background:var(--surface);border-radius:6px;font-size:.92rem}
 .wk-tap{background:none;border:1px solid var(--line);border-radius:10px;padding:10px;text-align:left;font:inherit;cursor:pointer;width:100%}
 .wk-tap:active{background:var(--bg)}
 .wk-more{grid-column:1/-1;color:var(--accent);font-weight:700;font-size:.88rem}
@@ -388,13 +397,13 @@ const nn = v => (v===""||v==null) ? null : v;
 function payId(docId,p){ const id=p.id||uid("p"); return id.length<6 ? `${docId}__${id}` : id; }
 function rowToDoc(r,pays){
   return norm({type:r.type, number:r.number, date:r.date, due:r.due||"", po:r.po||"", status:r.status, clientId:r.client_id||"",
-    client:r.client||{}, items:r.items||[], vatOn:!!r.vat_on, vatRate:+r.vat_rate, depositOn:!!r.deposit_on, depositPct:+r.deposit_pct, notes:r.notes||"", history:r.history||[],
+    client:r.client||{}, items:r.items||[], vatOn:!!r.vat_on, vatRate:+r.vat_rate, depositOn:!!r.deposit_on, depositPct:+r.deposit_pct, crewPlan:r.crew_plan||[], notes:r.notes||"", history:r.history||[],
     imported:!!r.imported, fromQuote:r.from_quote||"", convertedTo:r.converted_to||"", updated:r.updated_at,
     payments:(pays||[]).sort((a,b)=>a.date.localeCompare(b.date)).map(p=>({id:p.id,date:p.date,amount:+p.amount,method:p.method||"",note:p.note||""}))});
 }
 function docToRow(id,i){
   return {id, type:i.type, number:i.number, date:i.date, due:nn(i.due), po:i.po||"", status:i.status||"draft",
-    client_id:nn(i.clientId), client:i.client||{}, items:i.items||[], vat_on:!!i.vatOn, vat_rate:Number(i.vatRate)||20, deposit_on:!!i.depositOn, deposit_pct:Math.min(100,Math.max(0,Number(i.depositPct)||0)),
+    client_id:nn(i.clientId), client:i.client||{}, items:i.items||[], vat_on:!!i.vatOn, vat_rate:Number(i.vatRate)||20, deposit_on:!!i.depositOn, deposit_pct:Math.min(100,Math.max(0,Number(i.depositPct)||0)), crew_plan:(i.crewPlan||[]).filter(x=>x.workerId).map(x=>({workerId:x.workerId,days:+x.days||0,amount:r2(x.amount),manual:!!x.manual})),
     notes:i.notes||"", history:i.history||[], imported:!!i.imported, from_quote:nn(i.fromQuote), converted_to:nn(i.convertedTo)};
 }
 const rowToClient = r => ({name:r.name, address:r.address||"", phone:r.phone||"", email:r.email||"", notes:r.notes||"", source:r.source||"", ...(r.history?{history:r.history}:{})});
@@ -820,22 +829,7 @@ function renderDoc(app){
       </div>`).join(""):`<p class="sub" style="margin:0">No payments recorded yet. Deposits and part-payments go here too.</p>`}</div>
     <button class="btn small" id="addPay" style="justify-self:start">+ Record a payment</button>
   </div>`}
-  ${(()=>{ if(d.isNew||d.type!=="invoice") return "";
-    const dd=Object.values(S.workDays).filter(x=>x.documentId===d.id), pp=allExpenses().filter(e=>e.workerId&&e.documentId===d.id);
-    const mats=allExpenses().filter(e=>!e.workerId&&e.documentId===d.id);
-    if(!dd.length&&!pp.length&&!mats.length) return "";
-    const ws=[...new Set(dd.map(x=>x.workerId).concat(pp.map(e=>e.workerId)))];
-    // crew cost per painter: what they earned for logged days, or what they were paid if more
-    const cost=wid=>{ const a=r2(dd.filter(x=>x.workerId===wid).reduce((s,x)=>s+x.amount,0)), b=r2(pp.filter(e=>e.workerId===wid).reduce((s,e)=>s+e.amount,0)); return Math.max(a,b); };
-    const crew=r2(ws.reduce((s,w)=>s+cost(w),0)), matTot=r2(mats.reduce((s,e)=>s+e.amount,0)), t=totals(d), mine=r2(t.total-crew-matTot);
-    return `<div class="card"><h2>Crew and your commission</h2>
-      ${ws.length?`<table class="tbl"><tr><td class="sub">Painter</td><td class="sub r">Days</td><td class="sub r">Earned</td><td class="sub r">Paid</td></tr>
-      ${ws.map(wid=>{ const a=dd.filter(x=>x.workerId===wid), b=pp.filter(e=>e.workerId===wid); return `<tr><td>${esc((S.workers[wid]?.name||"").split(" ")[0])}</td><td class="r">${Math.round(a.reduce((s,x)=>s+x.portion,0)*100)/100}</td><td class="r">${money(a.reduce((s,x)=>s+x.amount,0))}</td><td class="r">${money(b.reduce((s,e)=>s+e.amount,0))}</td></tr>`; }).join("")}</table>`:""}
-      <div class="totals"><div><span>Invoice total</span><span>${money(t.total)}</span></div>
-        ${crew?`<div><span>Crew</span><span>−${money(crew)}</span></div>`:""}
-        ${matTot?`<div><span>Materials and costs linked to this invoice</span><span>−${money(matTot)}</span></div>`:""}
-        <div class="big"><span>Your commission</span><span style="${mine<0?"color:var(--bad)":""}">${money(mine)}${t.total>0?` <span class="sub" style="font-weight:600">(${Math.round(mine/t.total*100)}%)</span>`:""}</span></div></div>
-      <p class="sub" style="margin:0">From Team and Expenses. Crew pay is your cost, so it doesn't change what the client owes.</p></div>`; })()}
+  <div class="card cp-card" id="crewPanel">${crewPanelHTML(d)}</div>
   <div class="card"><h2>Notes &amp; terms</h2><textarea id="f-notes" data-k="notes" rows="9">${esc(d.notes)}</textarea></div>
   <div class="btns" style="justify-content:space-between">
     <div class="btns">
@@ -848,6 +842,10 @@ function renderDoc(app){
   $("#f-status").value=d.status==="paid"?"sent":d.status;
   drawTotals();
   app.oninput=onDocInput; app.onchange=onDocInput;
+  const cpWire=()=>{ const ad=$("#cpAdd"); if(ad) ad.onclick=()=>{ const d=draft; d.crewPlan=d.crewPlan||[]; const used=new Set(d.crewPlan.map(x=>x.workerId)); const nxt=(activeWorkers().find(([k])=>!used.has(k))||activeWorkers()[0]||[""])[0];
+      d.crewPlan.push({workerId:nxt,days:"",amount:"",manual:false}); $("#crewPanel").innerHTML=crewPanelHTML(d); cpWire(); const ins=document.querySelectorAll(`[data-cp="${d.crewPlan.length-1}"][data-cpf="days"]`); if(ins[0]) ins[0].focus(); };
+    document.querySelectorAll("[data-cprm]").forEach(b=>b.onclick=()=>{ draft.crewPlan.splice(+b.dataset.cprm,1); $("#crewPanel").innerHTML=crewPanelHTML(draft); cpWire(); }); };
+  cpWire();
   bindDocHead(app);
   const pick=$("#pickItem"); if(pick) pick.onchange=e=>{ const it=S.items[e.target.value]; if(!it) return; const blank=d.items.length===1&&!d.items[0].desc&&!d.items[0].rate; if(blank) d.items=[]; d.items.push({desc:it.desc,rate:String(it.rate),qty:1}); rerenderKeep(); };
   $("#addItem").onclick=()=>{ d.items.push({desc:"",rate:"",qty:1}); rerenderKeep(); $(`#f-desc-${d.items.length-1}`).focus(); };
@@ -881,8 +879,81 @@ function onDocInput(e){
     const i=+el.dataset.i; d.items[i][el.dataset.f]=el.value;
     const a=$(`#amt-${i}`); if(a) a.textContent=money((+d.items[i].rate||0)*(+d.items[i].qty||0));
   } else if(el.dataset.p){ d.payments[+el.dataset.p][el.dataset.pf]=el.value; }
-  drawTotals();
+  else if(el.dataset.cp!==undefined){ const i=+el.dataset.cp, row=d.crewPlan[i], fld=el.dataset.cpf; row[fld]=el.value;
+    const rate=S.workers[row.workerId]?.dayRate||0;
+    if(fld==="amount") row.manual=true;
+    if((fld==="days"||fld==="workerId")&&!row.manual){ row.amount=r2((+row.days||0)*rate); const a=$(`#cp-amt-${i}`); if(a) a.value=row.amount||""; }
+    drawCrewSummary(); }
+  drawTotals(); drawCrewSummary();
 }
+
+/* ================= crew forecast and management fee (never shown on the PDF) ================= */
+function crewFigures(d){
+  const isNew=d.isNew, id=d.id;
+  const dd=isNew?[]:Object.values(S.workDays).filter(x=>x.documentId===id);
+  const pp=isNew?[]:allExpenses().filter(e=>e.workerId&&e.documentId===id);
+  const mats=isNew?[]:allExpenses().filter(e=>!e.workerId&&e.documentId===id);
+  const plan=(d.crewPlan||[]).filter(x=>x.workerId);
+  const ws=[...new Set(plan.map(x=>x.workerId).concat(dd.map(x=>x.workerId),pp.map(e=>e.workerId)))];
+  const per=ws.map(w=>{ const pl=plan.filter(x=>x.workerId===w);
+    const planned=r2(pl.reduce((a,x)=>a+(+x.amount||0),0)), plannedDays=pl.reduce((a,x)=>a+(+x.days||0),0);
+    const earned=r2(dd.filter(x=>x.workerId===w).reduce((a,x)=>a+x.amount,0)), days=dd.filter(x=>x.workerId===w).reduce((a,x)=>a+x.portion,0);
+    const paid=r2(pp.filter(e=>e.workerId===w).reduce((a,e)=>a+e.amount,0));
+    const expected=Math.max(planned,earned,paid);
+    return {w,planned,plannedDays,earned,days,paid,expected,toPay:r2(Math.max(0,expected-paid))}; });
+  const t=totals(d), matTot=r2(mats.reduce((a,e)=>a+e.amount,0));
+  const planned=r2(per.reduce((a,x)=>a+x.planned,0)), expected=r2(per.reduce((a,x)=>a+x.expected,0)), crewPaid=r2(per.reduce((a,x)=>a+x.paid,0));
+  const toPay=r2(per.reduce((a,x)=>a+x.toPay,0));
+  const received=d.type==="invoice"?t.paid:0;
+  const inHand=r2(received-crewPaid-matTot), keep=r2(Math.max(0,Math.min(inHand,toPay))), free=r2(Math.max(0,inHand-keep)), short=r2(Math.max(0,toPay-Math.max(0,inHand)));
+  const fee=r2(t.total-expected-matTot);
+  return {per,t,matTot,planned,expected,crewPaid,toPay,received,inHand,keep,free,short,fee,hasActual:dd.length||pp.length||mats.length,plan};
+}
+function crewPanelHTML(d){
+  const f=crewFigures(d), isQ=d.type==="quote", ws=activeWorkers();
+  const first=w=>(S.workers[w]?.name||"Painter").split(" ")[0];
+  const plan=d.crewPlan||[];
+  const pct=v=>f.t.total>0?` <span class="sub" style="font-weight:600">(${Math.round(v/f.t.total*100)}%)</span>`:"";
+  return `<h2>Crew and your management fee</h2>
+  <p class="sub" style="margin:0">Only you see this. It isn't on the PDF and doesn't change what the client owes.</p>
+  <div class="cp-forecast">
+    <div class="cp-tag">Forecast · nothing paid</div>
+    ${plan.length?plan.map((x,i)=>`<div class="cp-row">
+      <select data-cp="${i}" data-cpf="workerId" aria-label="Painter">${ws.map(([k,w])=>`<option value="${k}" ${x.workerId===k?"selected":""}>${esc(w.name.split(" ")[0])}</option>`).join("")}</select>
+      <label class="cp-in"><input data-cp="${i}" data-cpf="days" inputmode="decimal" value="${esc(x.days??"")}" aria-label="Days"><span>days</span></label>
+      <label class="cp-in"><span>£</span><input id="cp-amt-${i}" data-cp="${i}" data-cpf="amount" inputmode="decimal" value="${esc(x.amount??"")}" aria-label="Wages"></label>
+      <button class="icon-btn" data-cprm="${i}" aria-label="Remove from forecast" title="Remove">✕</button></div>`).join(""):`<p class="sub" style="margin:0">Add the days each painter expects to need. The wages are worked out from their day rate, and you can change them.</p>`}
+    <button class="btn small" id="cpAdd" style="justify-self:start">+ Add painter to forecast</button>
+  </div>
+  <div id="cp-sum">${crewSummaryHTML(d,f)}</div>`;
+}
+function crewSummaryHTML(d,f){
+  f=f||crewFigures(d); const isQ=d.type==="quote";
+  const first=w=>(S.workers[w]?.name||"Painter").split(" ")[0];
+  const pct=v=>f.t.total>0?` <span class="sub" style="font-weight:600">(${Math.round(v/f.t.total*100)}%)</span>`:"";
+  if(!f.per.length&&!f.matTot) return "";
+  return `
+  <div class="totals cp-proj">
+    <div><span>${isQ?"Quote":"Invoice"} total</span><span>${money(f.t.total)}</span></div>
+    ${f.per.map(x=>`<div><span>${esc(first(x.w))}: ${x.earned>x.planned?`${Math.round(x.days*100)/100} days logged`:`${x.plannedDays} days forecast`}</span><span>−${money(x.expected)}</span></div>`).join("")}
+    ${f.matTot?`<div><span>Materials linked to this invoice</span><span>−${money(f.matTot)}</span></div>`:""}
+    <div class="big"><span>${f.toPay>0?"Projected management fee":"Your management fee"}</span><span style="${f.fee<0?"color:var(--bad)":""}">${money(f.fee)}${pct(f.fee)}</span></div>
+  </div>
+  ${!isQ?`<div class="cp-actual">
+    <div class="cp-tag solid">Actual money so far</div>
+    <div class="totals">
+      <div><span>Received from the client</span><span>${money(f.received)}</span></div>
+      <div><span>Paid to the crew</span><span>−${money(f.crewPaid)}</span></div>
+      ${f.matTot?`<div><span>Spent on materials</span><span>−${money(f.matTot)}</span></div>`:""}
+      <div class="big"><span>In hand from this job</span><span>${money(f.inHand)}</span></div>
+    </div>
+    ${f.toPay>0?`<div class="cp-keep"><b>Keep back ${money(f.keep)}</b> for wages still to pay (${money(f.toPay)}).<br>
+      ${f.free>0?`Free to use now: <b>${money(f.free)}</b>.`:`Nothing free to use yet.`}
+      ${f.short>0?`<br>The crew needs ${money(f.short)} more than you've received, so that comes from the client's next payment.`:""}</div>`
+    :f.per.length?`<div class="cp-keep">The crew is fully paid for this job.</div>`:""}
+  </div>`:`<p class="sub" style="margin:0">When this becomes an invoice, the forecast carries over and you'll see how much of the deposit to keep back.</p>`}`;
+}
+function drawCrewSummary(){ const el=$("#cp-sum"); if(el&&draft) el.innerHTML=crewSummaryHTML(draft); }
 function drawTotals(){
   const t=totals(draft), isQ=draft.type==="quote";
   $("#totals").innerHTML=`<div><span>Subtotal</span><span>${money(t.sub)}</span></div>
