@@ -297,8 +297,17 @@ const CATS = [
   ["businessEntertainmentCosts","Entertaining (not allowable)"],
   ["otherExpenses","Tools & other"]
 ];
-const CAT = Object.fromEntries(CATS);
-const METHODS = ["Bank transfer","Cash","Card","Cheque","Mobile app","Other"];
+const CAT = {...Object.fromEntries(CATS), clientPaidDirect:"Paid by the client directly (not your income or cost)"};
+const DIRECT = "Paid directly to painters";
+const METHODS = ["Bank transfer","Cash","Card","Cheque","Mobile app","Other",DIRECT];
+const isDirect = p => p && p.method===DIRECT;
+// money the client paid straight to the self-employed painters: it settles the invoice, but it never came to you,
+// so it's left out of your income, turnover, quarterly figures and VAT check
+function directPayments(){
+  const out=[];
+  Object.entries(S.invoices).forEach(([id,i])=>{ if(i.type!=="invoice"||i.status==="draft") return; (i.payments||[]).forEach(p=>{ if(isDirect(p)&&+p.amount) out.push({...p,amount:+p.amount,invId:id,number:i.number,client:i.client?.name||"",clientId:i.clientId}); }); });
+  return out;
+}
 const S = {settings:{...DEFAULT_SETTINGS}, invoices:{}, clients:{}, expenses:{}, items:{}, workers:{}, workDays:{}, ready:{invoices:false,clients:false,expenses:false,items:false}};
 const COLS=["invoices","clients","expenses","items"];
 let sb=null, user=null, downloads=true, assets=true, sampler=null, mode="loading";
@@ -377,18 +386,21 @@ function quartersOf(Y){
 const tyLabel = Y => `${Y}–${String(Y+1).slice(2)}`;
 function allPayments(){
   const out=[];
-  Object.entries(S.invoices).forEach(([id,i])=>{ if(i.type!=="invoice"||i.status==="draft") return; (i.payments||[]).forEach(p=>{ if(p.date && +p.amount) out.push({...p, amount:+p.amount, invId:id, number:i.number, client:i.client?.name||"", clientId:i.clientId}); }); });
+  Object.entries(S.invoices).forEach(([id,i])=>{ if(i.type!=="invoice"||i.status==="draft") return; (i.payments||[]).forEach(p=>{ if(p.date && +p.amount && !isDirect(p)) out.push({...p, amount:+p.amount, invId:id, number:i.number, client:i.client?.name||"", clientId:i.clientId}); }); });
   return out;
 }
+// expenses that count for tax: leaves out records of a client paying a painter directly (not your cost either)
+const taxExpenses = () => allExpenses().filter(e=>e.category!=="clientPaidDirect");
 const allExpenses = () => Object.entries(S.expenses).map(([id,e])=>({id,...e,amount:+e.amount||0}));
 function periodFigures(start,end){
   const pays=allPayments().filter(p=>p.date>=start&&p.date<=end);
-  const exps=allExpenses().filter(e=>e.date>=start&&e.date<=end);
+  const exps=taxExpenses().filter(e=>e.date>=start&&e.date<=end);
+  const direct=directPayments().filter(p=>p.date>=start&&p.date<=end);
   const income=r2(pays.reduce((a,p)=>a+p.amount,0));
   const byCat={}; exps.forEach(e=>{ byCat[e.category]=r2((byCat[e.category]||0)+e.amount); });
   const spent=r2(exps.reduce((a,e)=>a+e.amount,0));
   const allowable=r2(spent-(byCat.businessEntertainmentCosts||0));
-  return {pays,exps,income,byCat,spent,allowable,profit:r2(income-allowable)};
+  return {pays,exps,income,byCat,spent,allowable,profit:r2(income-allowable),direct,directTotal:r2(direct.reduce((a,p)=>a+p.amount,0))};
 }
 
 /* ================= storage (Supabase) ================= */
@@ -907,8 +919,9 @@ function crewFigures(d){
   const t=totals(d), matTot=r2(mats.reduce((a,e)=>a+e.amount,0));
   const planned=r2(per.reduce((a,x)=>a+x.planned,0)), expected=r2(per.reduce((a,x)=>a+x.expected,0)), crewPaid=r2(per.reduce((a,x)=>a+x.paid,0));
   const toPay=r2(per.reduce((a,x)=>a+x.toPay,0));
-  const received=d.type==="invoice"?t.paid:0;
-  const inHand=r2(received-crewPaid-matTot), keep=r2(Math.max(0,Math.min(inHand,toPay))), free=r2(Math.max(0,inHand-keep)), short=r2(Math.max(0,toPay-Math.max(0,inHand)));
+  const received=d.type==="invoice"?r2((d.payments||[]).filter(p=>!isDirect(p)).reduce((a,p)=>a+(+p.amount||0),0)):0;
+  const crewPaidMe=r2(pp.filter(e=>e.method!=="Paid by client").reduce((a,e)=>a+e.amount,0));
+  const inHand=r2(received-crewPaidMe-matTot), keep=r2(Math.max(0,Math.min(inHand,toPay))), free=r2(Math.max(0,inHand-keep)), short=r2(Math.max(0,toPay-Math.max(0,inHand)));
   const fee=r2(t.total-expected-matTot);
   return {per,t,matTot,planned,expected,crewPaid,toPay,received,inHand,keep,free,short,fee,hasActual:dd.length||pp.length||mats.length,plan};
 }
@@ -1197,7 +1210,7 @@ function chartSVG(Y){
   const key=iso=>iso.slice(0,7);
   const inc={}, out={};
   allPayments().filter(p=>p.date>=start&&p.date<=end).forEach(p=>inc[key(p.date)]=(inc[key(p.date)]||0)+p.amount);
-  allExpenses().filter(e=>e.date>=start&&e.date<=end).forEach(e=>out[key(e.date)]=(out[key(e.date)]||0)+e.amount);
+  taxExpenses().filter(e=>e.date>=start&&e.date<=end).forEach(e=>out[key(e.date)]=(out[key(e.date)]||0)+e.amount);
   const data=months.map(({y,m})=>{ const k=`${y}-${String(m+1).padStart(2,"0")}`; return {k,label:new Date(y,m,1).toLocaleDateString("en-GB",{month:"short"}).slice(0,3),i:inc[k]||0,o:out[k]||0}; });
   const max=Math.max(1,...data.map(d=>Math.max(d.i,d.o)));
   const step=[500,1000,2000,2500,5000,10000,20000].find(s=>max/s<=4)||Math.ceil(max/4/1000)*1000;
@@ -1278,6 +1291,7 @@ function renderQuarter(app){
       ${f.byCat.businessEntertainmentCosts?`<tr><td class="sub">of which not allowable (entertaining)</td><td class="r">${money(f.byCat.businessEntertainmentCosts)}</td></tr>`:""}
       <tr class="t"><td>Net profit</td><td class="r">${money(f.profit)}</td></tr>
     </table>
+    ${f.directTotal?`<div class="cp-keep" style="margin:0"><b>Not included: ${money(f.directTotal)}</b> paid by clients straight to the painters (self-employed, responsible for their own tax). It settled your invoices but never came into your account:<br>${f.direct.map(p=>`${esc(p.number)} · ${esc(p.client)} · ${ukDate(p.date)} · ${money(p.amount)}`).join("<br>")}</div>`:""}
     <p class="info" style="margin:0">Enter these in your HMRC-recognised software, or send the CSV to your accountant. This app can't submit to HMRC directly.</p>
   </div>
   <div class="sect"><h2>Payments received</h2><span class="sub">${f.pays.length}</span></div>
@@ -1358,16 +1372,23 @@ function buildPack(Y){
   const pr=[["Date received","Quarter","Invoice","Client","Method","Amount"],...pays.map(p=>[xd(p.date),qOf(p.date),p.number,p.client,p.method||"",p.amount]),[],["","","","","Total",pays.reduce((a,p)=>a+p.amount,0)]];
   XLSX.utils.book_append_sheet(wb,sheet(pr,[14,9,11,32,15,13],[5],[0],0),"Payments received");
   // Expenses
-  const ex=allExpenses().filter(e=>e.date>=start&&e.date<=end).sort((a,b)=>a.date.localeCompare(b.date));
+  const ex=taxExpenses().filter(e=>e.date>=start&&e.date<=end).sort((a,b)=>a.date.localeCompare(b.date));
   const er=[["Date","Quarter","Supplier / description","Category","HMRC field","Paid by","For client","Notes","Amount","Receipt file"],
     ...ex.map(e=>[xd(e.date),qOf(e.date),e.supplier||"",CAT[e.category]||e.category,e.category,e.method||"",S.clients[e.clientId]?.name||"",e.notes||"",e.amount,(e.receipts||[]).map((r,k)=>receiptFileName(e,r,e.receipts.length>1?k+1:1)).join("; ")||"Not attached"]),[],["","","","","","","","Total",ex.reduce((a,e)=>a+e.amount,0)]];
   XLSX.utils.book_append_sheet(wb,sheet(er,[12,9,30,26,28,13,22,30,12,44],[8],[0],0),"Expenses");
   // Invoices raised in the year
   const inv=docs("invoice").filter(i=>i.status!=="draft"&&i.date>=start&&i.date<=end).map(i=>({...i,_t:totals(i),_s:statusOf(i)})).sort((a,b)=>a.date.localeCompare(b.date)||a.number.localeCompare(b.number));
-  const ir=[["Invoice","Date","Client","Status","Subtotal","VAT","Total","Paid to date","Balance"],
-    ...inv.map(i=>[i.number,xd(i.date),i.client.name,STATUS_LABEL[i._s],i._t.sub,i._t.vat,i._t.total,i._t.paid,i._t.due]),[],
-    ["","","","Totals",inv.reduce((a,i)=>a+i._t.sub,0),inv.reduce((a,i)=>a+i._t.vat,0),inv.reduce((a,i)=>a+i._t.total,0),inv.reduce((a,i)=>a+i._t.paid,0),inv.reduce((a,i)=>a+i._t.due,0)]];
-  XLSX.utils.book_append_sheet(wb,sheet(ir,[11,12,32,12,13,11,13,13,13],[4,5,6,7,8],[1],0),"Invoices raised");
+  const dsum=i=>r2((i.payments||[]).filter(isDirect).reduce((a,p)=>a+(+p.amount||0),0));
+  const ir=[["Invoice","Date","Client","Status","Subtotal","VAT","Total","Paid to date","Of which paid direct to painters (not my income)","Received by me","Balance"],
+    ...inv.map(i=>[i.number,xd(i.date),i.client.name,STATUS_LABEL[i._s],i._t.sub,i._t.vat,i._t.total,i._t.paid,dsum(i),r2(i._t.paid-dsum(i)),i._t.due]),[],
+    ["","","","Totals",inv.reduce((a,i)=>a+i._t.sub,0),inv.reduce((a,i)=>a+i._t.vat,0),inv.reduce((a,i)=>a+i._t.total,0),inv.reduce((a,i)=>a+i._t.paid,0),inv.reduce((a,i)=>a+dsum(i),0),inv.reduce((a,i)=>a+i._t.paid-dsum(i),0),inv.reduce((a,i)=>a+i._t.due,0)]];
+  XLSX.utils.book_append_sheet(wb,sheet(ir,[11,12,32,12,13,11,13,13,22,14,13],[4,5,6,7,8,9,10],[1],0),"Invoices raised");
+  const dp=directPayments().filter(p=>p.date>=start&&p.date<=end).sort((a,b)=>a.date.localeCompare(b.date));
+  if(dp.length){
+    const dr=[["Paid by clients directly to the painters. The painters are self-employed sole traders responsible for their own tax. This money settled the invoices below but never came into my account, so it is not included in my income."],[],
+      ["Date","Quarter","Invoice","Client","Note","Amount"],...dp.map(p=>[xd(p.date),qOf(p.date),p.number,p.client,p.note||"",p.amount]),[],["","","","","Total",dp.reduce((a,p)=>a+p.amount,0)]];
+    XLSX.utils.book_append_sheet(wb,sheet(dr,[14,9,11,32,40,13],[5],[0],2),"Paid direct to painters");
+  }
   // Money owed now (all years)
   const od=owedNow.sort((a,b)=>a.date.localeCompare(b.date));
   const orows=[["Invoice","Date","Client","Phone","Total","Paid","Balance owed","Days since invoice"],
@@ -1395,7 +1416,7 @@ function yearCSV(Y){
 
 /* ================= EXPENSES ================= */
 function renderExpenses(app){
-  let list=allExpenses();
+  let list=taxExpenses();
   if(ui.expQ){ const q=ui.expQ.toLowerCase(); list=list.filter(e=>[e.supplier,e.notes,CAT[e.category]].join(" ").toLowerCase().includes(q)); }
   if(ui.expCat) list=list.filter(e=>e.category===ui.expCat);
   const noRcpt=e=>!(e.receipts&&e.receipts.length);
@@ -1409,7 +1430,7 @@ function renderExpenses(app){
     <input id="exp-q" type="search" placeholder="Search" value="${esc(ui.expQ)}">
     <select id="exp-cat"><option value="">All categories</option>${CATS.map(([k,l])=>`<option value="${k}" ${ui.expCat===k?"selected":""}>${l}</option>`).join("")}</select>
   </div>
-  <div class="pills"><button class="pill" id="exp-miss" aria-pressed="${!!ui.expMissing}">Missing a receipt (${allExpenses().filter(noRcpt).length})</button></div>
+  <div class="pills"><button class="pill" id="exp-miss" aria-pressed="${!!ui.expMissing}">Missing a receipt (${taxExpenses().filter(noRcpt).length})</button></div>
   ${Object.keys(groups).length>1?`<div class="btns" style="justify-content:flex-end;margin:4px 0 -4px"><button class="btn small" id="exp-all">${Object.keys(groups).every(k=>expMonthOpen(k))?"Collapse all":"Expand all"}</button></div>`:""}
   ${loading("expenses")?`<div class="empty">Loading…</div>`:Object.keys(groups).length?Object.entries(groups).map(([k,es])=>`
     <button class="sect month-tog" data-month="${k}" aria-expanded="${expMonthOpen(k)}"><h2><span class="chev">${expMonthOpen(k)?"▾":"▸"}</span> ${new Date(k+"-01T12:00").toLocaleDateString("en-GB",{month:"long",year:"numeric"})}</h2><span class="sub num">${es.length} · ${money(es.reduce((a,e)=>a+e.amount,0))}</span></button>
@@ -1648,7 +1669,7 @@ function renderBackup(app){
   $("#x-inv").onclick=()=>saveFile(`Invoices and quotes ${d}.csv`, csv([["Type","Number","Date","Due","Client","Phone","Email","Status","Subtotal","VAT","Total","Paid","Balance"],
     ...Object.values(S.invoices).sort((a,b)=>b.date.localeCompare(a.date)).map(i=>{const t=totals(i);return [i.type==="quote"?"Quote":"Invoice",i.number,ukDate(i.date),ukDate(i.due),i.client.name,i.client.phone,i.client.email,STATUS_LABEL[statusOf(i)],t.sub.toFixed(2),t.vat.toFixed(2),t.total.toFixed(2),t.paid.toFixed(2),(i.type==="quote"?0:t.due).toFixed(2)];})]));
   $("#x-pay").onclick=()=>saveFile(`Payments ${d}.csv`, csv([["Date","Invoice","Client","Method","Amount","Tax year"],...allPayments().sort((a,b)=>a.date.localeCompare(b.date)).map(p=>[ukDate(p.date),p.number,p.client,p.method||"",p.amount.toFixed(2),tyLabel(taxYearOf(p.date))])]));
-  $("#x-exp").onclick=()=>saveFile(`Expenses ${d}.csv`, csv([["Date","Supplier / description","Category","HMRC field","Paid by","Client","Notes","Amount","Tax year"],...allExpenses().sort((a,b)=>a.date.localeCompare(b.date)).map(e=>[ukDate(e.date),e.supplier,CAT[e.category],e.category,e.method,S.clients[e.clientId]?.name||"",e.notes,e.amount.toFixed(2),tyLabel(taxYearOf(e.date))])]));
+  $("#x-exp").onclick=()=>saveFile(`Expenses ${d}.csv`, csv([["Date","Supplier / description","Category","HMRC field","Paid by","Client","Notes","Amount","Tax year"],...taxExpenses().sort((a,b)=>a.date.localeCompare(b.date)).map(e=>[ukDate(e.date),e.supplier,CAT[e.category],e.category,e.method,S.clients[e.clientId]?.name||"",e.notes,e.amount.toFixed(2),tyLabel(taxYearOf(e.date))])]));
   $("#x-cli").onclick=()=>saveFile(`Clients ${d}.csv`, csv([["Name","Phone","Email","Address","Found via","Notes","Invoiced","Paid","Owed","Last job"],...Object.entries(S.clients).sort((a,b)=>a[1].name.localeCompare(b[1].name)).map(([id,c])=>{const s=clientStats(id);return [c.name,c.phone,c.email,(c.address||"").replace(/\n/g,", "),c.source,c.notes,s.invoiced.toFixed(2),s.paid.toFixed(2),s.owed.toFixed(2),ukDate(s.last)];})]));
   $("#x-team").onclick=()=>saveFile(`Team days ${d}.csv`, csv([["Date","Painter","Day","Amount","Client","Invoice","Notes","Tax year"],...Object.values(S.workDays).sort((a,b)=>a.date.localeCompare(b.date)).map(w=>[ukDate(w.date),S.workers[w.workerId]?.name||"",w.portion,w.amount.toFixed(2),S.clients[w.clientId]?.name||"",S.invoices[w.documentId]?.number||"",w.notes,tyLabel(taxYearOf(w.date))])]));
   $("#x-all").onclick=()=>saveFile(`Signature backup ${d}.json`, JSON.stringify({exported:new Date().toISOString(),settings:S.settings,clients:S.clients,invoices:S.invoices,expenses:S.expenses},null,1));
@@ -1929,7 +1950,7 @@ function renderWorkerPay(app){
     <div class="field"><span class="label">Who paid them</span>
       ${p.editId&&direct?`<div class="sub">Paid by the client directly. To change that, delete this payment and record it again.</div>`:`<div class="seg2"><button data-how="Bank transfer" aria-pressed="${p.how==="Bank transfer"}">Me, by bank</button><button data-how="Cash" aria-pressed="${p.how==="Cash"}">Me, in cash</button>${p.editId?"":`<button data-how="client" aria-pressed="${direct}">The client</button>`}</div>`}</div>
     ${direct?`<label class="field"><span class="label">Which invoice did the client pay towards?</span><select id="wp-doc" ${p.editId?"disabled":""}><option value="">Choose the invoice</option>${invs.map(i=>`<option value="${i.id}" ${p.documentId===i.id?"selected":""}>${esc(i.number)} · ${esc(i.client?.name||"")} · ${money(i._t.due)} left</option>`).join("")}</select></label>
-    <div class="info">This records the money twice, the way your accounts need it: as a payment from the client on that invoice (your income), and as a payment to ${esc(w?.name?.split(" ")[0]||"them")} (your subcontractor cost). Check this treatment with your accountant.</div>`
+    <div class="info">This marks that part of the invoice as paid, but because the money went straight to ${esc(w?.name?.split(" ")[0]||"them")} it isn't counted as your income or as your cost. ${esc(w?.name?.split(" ")[0]||"They")} handles the tax on it.</div>`
     :`<label class="field"><span class="label">Which job is this for?</span><select id="wp-job">
         ${p.editId?"":`<option value="auto" ${p.job==="auto"?"selected":""}>Whatever's owed, oldest job first</option>`}
         ${owing.map(r=>`<option value="${esc(r.clientId)}" ${p.job===r.clientId?"selected":""}>${esc(jobName(r.clientId))} · ${money(r.owed)} owed</option>`).join("")}
@@ -1965,11 +1986,11 @@ function renderWorkerPay(app){
       }
       if(direct){
         const inv=JSON.parse(JSON.stringify(S.invoices[p.documentId])); const clientId=inv.clientId||"";
-        const linked=uid("p"); inv.payments=(inv.payments||[]).concat([{id:linked,date:p.date,amount:amt,method:"Paid direct to subcontractor",note:`Paid by the client straight to ${w.name}`}]);
+        const linked=uid("p"); inv.payments=(inv.payments||[]).concat([{id:linked,date:p.date,amount:amt,method:DIRECT,note:`Paid by the client straight to ${w.name}`}]);
         if(inv.status==="draft") inv.status="sent";
         (inv.history=inv.history||[]).push({at:new Date().toISOString(),text:`Payment recorded: ${money(amt)} on ${ukDate(p.date)}, paid by the client straight to ${w.name}`});
         await put("invoices",p.documentId,inv);
-        await put("expenses",uid("exp_"),{date:p.date,supplier:w.name,category:"cisPaymentsToSubcontractors",amount:amt,method:"Paid by client",clientId,documentId:p.documentId,notes:p.notes||`Paid by the client on ${inv.number}`,receipts:[],source:"team",workerId:p.workerId,linkedPaymentId:linked});
+        await put("expenses",uid("exp_"),{date:p.date,supplier:w.name,category:"clientPaidDirect",amount:amt,method:"Paid by client",clientId,documentId:p.documentId,notes:p.notes||`Paid by the client on ${inv.number}`,receipts:[],source:"team",workerId:p.workerId,linkedPaymentId:linked});
       } else {
         const parts = p.job==="auto" ? allocatePay(p.workerId,amt).map(x=>({...x,doc:defaultRef(p.workerId,x.clientId)})) : [{clientId:p.job,amount:amt,doc:p.refDoc||""}];
         for(const x of parts) await put("expenses",uid("exp_"),{date:p.date,supplier:w.name,category:"cisPaymentsToSubcontractors",amount:x.amount,method:p.how,clientId:x.clientId,documentId:x.doc,notes:p.notes||(docNo(x.doc)?`For ${docNo(x.doc)}`:""),receipts:[],source:"team",workerId:p.workerId,linkedPaymentId:""});
