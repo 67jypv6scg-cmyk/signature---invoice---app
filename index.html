@@ -81,6 +81,8 @@ button.stat:hover{border-color:var(--accent)}
 .wk-card .owed{font-weight:700;font-size:1.25rem;font-variant-numeric:tabular-nums}
 .wk-nums{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;font-size:.86rem;color:var(--muted)}
 .wk-nums b{display:block;color:var(--fg);font-size:1rem;font-variant-numeric:tabular-nums}
+@keyframes flash{0%{box-shadow:0 0 0 3px var(--accent)}100%{box-shadow:0 0 0 0 transparent}}
+.card.flash{animation:flash 1.4s ease-out}
 .leave-sheet{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;z-index:200;padding:16px}
 .leave-box{background:var(--surface);color:var(--text,inherit);border-radius:14px;padding:18px;max-width:460px;width:100%;display:grid;gap:12px;margin-bottom:max(16px,env(safe-area-inset-bottom))}
 @media (min-width:700px){.leave-sheet{align-items:center}}
@@ -1180,11 +1182,13 @@ function sendMessage(d){
 function renderPreview(app){
   const d=draft, isQ=d.type==="quote";
   const phone=d.client.phone||S.clients[d.clientId]?.phone||"";
+  const email=d.client.email||S.clients[d.clientId]?.email||"";
+  const subject=`${isQ?"Quote":"Invoice"} ${d.number||""} from ${S.settings.bizName||"Signature Bespoke Decorating"}`.replace(/\s+/g," ");
   app.innerHTML=`
   ${docHead(d,"preview")}
   <div id="frame" class="sheet-frame">${sheetHTML(d)}</div>
   <div class="card" id="sendCard" style="margin-top:16px">
-    <h2>Send to ${esc(d.client.name||"client")}</h2>
+    <h2>WhatsApp to ${esc(d.client.name||"client")}</h2>
     <ol class="sub" style="margin:0;padding-left:18px;display:grid;gap:2px"><li>Copy the message, then tap Share PDF and pick WhatsApp and the client. Paste the message with it.</li><li>Or open WhatsApp with the message filled in, then attach the downloaded PDF.</li></ol>
     <label class="field"><span class="label">WhatsApp number</span><input id="wa-num" type="tel" value="${esc(phone)}" placeholder="07… or +44…"></label>
     <label class="field"><span class="label">Message</span><textarea id="wa-msg" class="msgbox">${esc(sendMessage(d))}</textarea></label>
@@ -1196,6 +1200,19 @@ function renderPreview(app){
     </div>
     <p class="sub" style="margin:0">If WhatsApp doesn't open, copy the message and paste it into the chat yourself.</p>
   </div>
+  <div class="card" id="emailCard">
+    <h2>Email to ${esc(d.client.name||"client")}</h2>
+    <ol class="sub" style="margin:0;padding-left:18px;display:grid;gap:2px"><li>Tap <b>Email the PDF</b> and pick Titan (or Mail). The PDF is attached and the message goes in the email. The client's address is copied, so paste it into "To".</li><li>Or tap <b>Open email app</b> to start an email with the address, subject and message filled in, then attach the downloaded PDF.</li></ol>
+    <label class="field"><span class="label">Email address</span><input id="em-to" type="email" inputmode="email" value="${esc(email)}" placeholder="client@example.com"></label>
+    <label class="field"><span class="label">Subject</span><input id="em-sub" value="${esc(subject)}"></label>
+    <label class="field"><span class="label">Message</span><textarea id="em-msg" class="msgbox">${esc(sendMessage(d))}</textarea></label>
+    <div class="btns">
+      <button class="btn primary" id="emailPdf">Email the PDF</button>
+      <a class="btn" id="em-link" href="#">Open email app</a>
+      <button class="btn" id="pdf3">Download PDF</button>
+    </div>
+    ${email?"":`<p class="sub" style="margin:0">No email saved for this client yet. Type it above; to keep it, add it to the client in Clients.</p>`}
+  </div>
   <div style="height:72px"></div>
   <div class="actionbar"><button class="btn" id="pdf">Download PDF</button><button class="btn primary" id="toSend">Send</button></div>`;
   fitSheet(); bindDocHead(app);
@@ -1204,7 +1221,19 @@ function renderPreview(app){
   upd(); $("#wa-num").oninput=upd; $("#wa-msg").oninput=upd;
   $("#pdf").onclick=()=>makePdf(d,$("#pdf")); $("#pdf2").onclick=()=>makePdf(d,$("#pdf2"));
   $("#sharePdf").onclick=async()=>{ const ok=await makePdf(d,$("#sharePdf"),true); if(ok){ if(d.status==="draft") d.status="sent"; logHistory(d,"PDF shared"); saveDoc(false,true); } };
-  $("#toSend").onclick=()=>$("#sendCard").scrollIntoView({behavior:matchMedia("(prefers-reduced-motion: reduce)").matches?"auto":"smooth"});
+  const elink=$("#em-link");
+  const eupd=()=>{ elink.href=`mailto:${encodeURIComponent($("#em-to").value.trim()).replace(/%40/g,"@")}?subject=${encodeURIComponent($("#em-sub").value)}&body=${encodeURIComponent($("#em-msg").value)}`; };
+  eupd(); ["#em-to","#em-sub","#em-msg"].forEach(s=>$(s).oninput=eupd);
+  $("#pdf3").onclick=()=>makePdf(d,$("#pdf3"));
+  const sentByEmail=()=>{ if(d.status==="draft") d.status="sent"; const to=$("#em-to").value.trim(); logHistory(d,`Sent by email${to?" to "+to:""}`); saveDoc(false,true); };
+  $("#emailPdf").onclick=async()=>{
+    const to=$("#em-to").value.trim();
+    if(to){ try{ navigator.clipboard.writeText(to).then(()=>toast(`${to} copied: paste it into "To"`),()=>{}); }catch(e){} }
+    const ok=await makePdf(d,$("#emailPdf"),true,{title:$("#em-sub").value,text:$("#em-msg").value});
+    if(ok) sentByEmail();
+  };
+  elink.addEventListener("click",()=>{ if($("#em-to").value.trim()) sentByEmail(); });
+  $("#toSend").onclick=()=>{ const c=$("#sendCard"); c.scrollIntoView({behavior:matchMedia("(prefers-reduced-motion: reduce)").matches?"auto":"smooth"}); [c,$("#emailCard")].forEach(x=>{ x.classList.remove("flash"); void x.offsetWidth; x.classList.add("flash"); }); };
   $("#copyMsg").onclick=()=>{ const t=$("#wa-msg"); const ok=()=>toast("Message copied"); try{ navigator.clipboard.writeText(t.value).then(ok,()=>{t.select();toast("Press and hold to copy");}); }catch(e){ t.select(); toast("Press and hold to copy"); } };
   link.addEventListener("click",()=>{ // record it, without blocking the link
     if(d.status==="draft") d.status="sent";
@@ -1234,16 +1263,16 @@ async function saveFile(filename,data){
     toast("Saved"); return true;
   }catch(e){ toast("Couldn't save: "+(e?.message||"unknown error")); return false; }
 }
-async function shareFile(filename,blob){
+async function shareFile(filename,blob,extra){
   const file=new File([blob],filename,{type:blob.type||"application/pdf"});
   if(navigator.canShare&&navigator.canShare({files:[file]})){
-    try{ await navigator.share({files:[file],title:filename}); return true; }
+    try{ await navigator.share(extra?{files:[file],title:extra.title||filename,text:extra.text||""}:{files:[file],title:filename}); return true; }
     catch(e){ if(e?.name==="AbortError") return false; }
   }
   toast("Sharing isn't available here, so the PDF was downloaded instead.");
   return saveFile(filename,blob);
 }
-async function makePdf(inv,btn,share=false){
+async function makePdf(inv,btn,share=false,shareExtra=null){
   if(!window.html2canvas||!window.jspdf){ toast("The PDF maker didn't load. Check your connection and reopen the app."); return; }
   const label=btn.textContent; btn.disabled=true; btn.textContent="Making PDF…";
   try{
@@ -1273,7 +1302,7 @@ async function makePdf(inv,btn,share=false){
     }
     host.innerHTML="";
     const fname=`${inv.number} ${inv.client?.name||""}`.trim().replace(/[\\/:*?"<>|]+/g,"")+".pdf", blob=pdf.output("blob");
-    return share ? await shareFile(fname,blob) : await saveFile(fname,blob);
+    return share ? await shareFile(fname,blob,shareExtra) : await saveFile(fname,blob);
   }catch(e){ toast("Couldn't make the PDF: "+(e?.message||"unknown error")); return false; }
   finally{ btn.disabled=false; btn.textContent=label; }
 }
