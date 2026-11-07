@@ -81,6 +81,9 @@ button.stat:hover{border-color:var(--accent)}
 .wk-card .owed{font-weight:700;font-size:1.25rem;font-variant-numeric:tabular-nums}
 .wk-nums{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;font-size:.86rem;color:var(--muted)}
 .wk-nums b{display:block;color:var(--fg);font-size:1rem;font-variant-numeric:tabular-nums}
+.leave-sheet{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;z-index:200;padding:16px}
+.leave-box{background:var(--surface);color:var(--text,inherit);border-radius:14px;padding:18px;max-width:460px;width:100%;display:grid;gap:12px;margin-bottom:max(16px,env(safe-area-inset-bottom))}
+@media (min-width:700px){.leave-sheet{align-items:center}}
 .cp-forecast{border:2px dashed var(--line);border-radius:10px;padding:12px;display:grid;gap:8px}
 .cp-actual{border:1px solid var(--line);border-radius:10px;padding:12px;display:grid;gap:8px;background:var(--bg)}
 .cp-tag{justify-self:start;font-size:.72rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--warn);border:1px dashed var(--warn);border-radius:99px;padding:3px 10px}
@@ -576,9 +579,28 @@ async function boot(){
 async function signOut(){ await sb.auth.signOut(); location.reload(); }
 
 /* ================= navigation ================= */
-function go(scr,p={},push=true){ if(push) stack.push({screen,params,y:scrollY}); screen=scr; params=p; render(); scrollTo(0,0); }
-function back(){ const s=stack.pop(); if(!s){ screen=tab; params={}; render(); return;} screen=s.screen; params=s.params; render(); scrollTo(0,s.y||0); }
-function setTab(t){ tab=t; stack=[]; screen=t; params={}; render(); scrollTo(0,0); }
+/* leaving a quote or invoice with changes that haven't been saved asks first, so nothing is lost by accident */
+let snapOf=null, draftSnap="";
+const docDirty = () => screen==="doc" && draft && snapOf===draft && JSON.stringify(draft)!==draftSnap;
+const markClean = () => { snapOf=draft; draftSnap=draft?JSON.stringify(draft):""; };
+function guardLeave(next){
+  if(!docDirty()) return false;
+  document.querySelector(".leave-sheet")?.remove();
+  const el=document.createElement("div"); el.className="leave-sheet";
+  el.innerHTML=`<div class="leave-box" role="dialog" aria-modal="true" aria-labelledby="lv-h"><h2 id="lv-h">Save your changes${draft.number?` to ${esc(draft.number)}`:""}?</h2>
+    <p class="sub" style="margin:0">You changed this ${draft.type==="quote"?"quote":"invoice"} but haven't saved it. If you don't save, the changes are lost.</p>
+    <div class="btns" style="justify-content:flex-end"><button class="btn" data-lv="stay">Keep editing</button><button class="btn danger" data-lv="drop">Don't save</button><button class="btn primary" data-lv="save">Save</button></div></div>`;
+  document.body.appendChild(el);
+  el.onclick=async ev=>{ const b=ev.target.closest("[data-lv]"); if(!b&&ev.target!==el) return; const k=b?b.dataset.lv:"stay";
+    if(k==="stay"){ el.remove(); return; }
+    if(k==="save"){ b.disabled=true; const ok=await saveDoc(false); el.remove(); if(!ok) return; }
+    else { el.remove(); markClean(); }
+    next(); };
+  return true;
+}
+function go(scr,p={},push=true){ if(scr!=="doc"&&guardLeave(()=>go(scr,p,push))) return; if(push) stack.push({screen,params,y:scrollY}); screen=scr; params=p; render(); scrollTo(0,0); }
+function back(){ if(guardLeave(back)) return; const s=stack.pop(); if(!s){ screen=tab; params={}; render(); return;} screen=s.screen; params=s.params; render(); scrollTo(0,s.y||0); }
+function setTab(t){ if(guardLeave(()=>setTab(t))) return; tab=t; stack=[]; screen=t; params={}; render(); scrollTo(0,0); }
 const backBtn = (label="Back") => `<button class="btn small" data-act="back">← ${label}</button>`;
 
 function render(){
@@ -798,6 +820,7 @@ function bindDocHead(app){
   app.querySelectorAll("[data-view]").forEach(b=>b.onclick=()=>{ params={...params,view:b.dataset.view}; render(); scrollTo(0,0); });
 }
 function renderDoc(app){
+  if(snapOf!==draft) markClean();
   const v=params.view||"edit";
   if(v==="preview") return renderPreview(app);
   if(v==="history") return renderHistory(app);
@@ -842,6 +865,7 @@ function renderDoc(app){
     </div>`).join("")}
     <div class="btns"><button class="btn small" id="addItem">+ Add line</button>${Object.keys(S.items).length?`<select id="pickItem" style="width:auto;max-width:100%"><option value="">+ Add a saved item…</option>${Object.entries(S.items).sort((a,b)=>a[1].desc.localeCompare(b[1].desc)).map(([id,it])=>`<option value="${id}">${esc(it.desc.split("\n")[0])} · ${money(it.rate)}</option>`).join("")}</select>`:""}</div>
     <label class="check"><input type="checkbox" id="f-vat" data-k="vatOn" ${d.vatOn?"checked":""}> Charge VAT at <input id="f-vatrate" data-k="vatRate" inputmode="decimal" style="width:64px" value="${esc(d.vatRate)}">%</label>
+    ${d.vatOn&&!S.settings.vatOn?`<p class="sub" style="margin:-4px 0 0;color:var(--bad)">You're not VAT registered (Settings), so this would add VAT the client shouldn't pay. Untick it unless you mean to.</p>`:""}
     <label class="check"><input type="checkbox" id="f-dep" data-k="depositOn" ${d.depositOn?"checked":""}> Ask for a deposit of <input id="f-deppct" data-k="depositPct" inputmode="decimal" style="width:64px" value="${esc(d.depositPct??20)}">%</label>
     <div class="totals" id="totals"></div>
   </div>
@@ -913,6 +937,7 @@ function onDocInput(e){
     const v=el.type==="checkbox"?el.checked:el.value;
     if(el.dataset.k.startsWith("client.")){ d.client[el.dataset.k.slice(7)]=v; if(el.dataset.k==="client.name") d.clientId=""; }
     else d[el.dataset.k]=v;
+    if(el.dataset.k==="vatOn"){ rerenderKeep(); return; }
   } else if(el.dataset.f){
     const i=+el.dataset.i; d.items[i][el.dataset.f]=el.value;
     const a=$(`#amt-${i}`); if(a) a.textContent=money((+d.items[i].rate||0)*(+d.items[i].qty||0));
@@ -1057,7 +1082,7 @@ async function saveDoc(leave,quiet){
   before.forEach((amt,pid)=>{ if(!after.has(pid)) logHistory(d,`Payment of ${money(amt)} removed`); });
   logHistory(d);
   const {id,isNew,...data}=d; data.updated=new Date().toISOString();
-  try{ await put("invoices",id,data); delete d.isNew; if(!quiet) toast(`${d.number} saved`); if(leave) back(); return true; }
+  try{ await put("invoices",id,data); delete d.isNew; markClean(); if(!quiet) toast(`${d.number} saved`); if(leave) back(); return true; }
   catch(e){ toast("Couldn't save: "+(e?.message||"try again in a moment")); return false; }
 }
 
