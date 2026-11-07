@@ -443,7 +443,7 @@ let lastLoad=0;
 async function loadAll(){
   const [docs,pays,clients,exps,items,settings,hist,workers,days]=await Promise.all(["documents","payments","clients","expenses","saved_items","settings","income_history","workers","work_days"].map(fetchAll));
   S.workers=Object.fromEntries(workers.map(r=>[r.id,{name:r.name,dayRate:+r.day_rate,trackingFrom:r.tracking_from,active:r.active,notes:r.notes||""}]));
-  S.workDays=Object.fromEntries(days.map(r=>[r.id,{workerId:r.worker_id,date:r.date,portion:+r.portion,amount:+r.amount,clientId:r.client_id||"",documentId:r.document_id||"",notes:r.notes||""}]));
+  S.workDays=Object.fromEntries(days.map(r=>[r.id,{workerId:r.worker_id,date:r.date,portion:+r.portion,amount:+r.amount,clientId:r.client_id||"",documentId:r.document_id||"",notes:r.notes||"",kind:r.kind||"day"}]));
   const byDoc={}; pays.forEach(p=>(byDoc[p.document_id]=byDoc[p.document_id]||[]).push(p));
   S.invoices=Object.fromEntries(docs.map(r=>[r.id,rowToDoc(r,byDoc[r.id])]));
   S.clients=Object.fromEntries(clients.map(r=>[r.id,rowToClient(r)]));
@@ -467,7 +467,7 @@ async function put(col,id,data){
   } else if(col==="workers"){
     S.workers[id]=clean; chk(await sb.from("workers").upsert({id,name:clean.name,day_rate:r2(clean.dayRate),tracking_from:clean.trackingFrom||todayISO(),active:clean.active!==false,notes:clean.notes||""}));
   } else if(col==="workDays"){
-    S.workDays[id]=clean; chk(await sb.from("work_days").upsert({id,worker_id:clean.workerId,date:clean.date,portion:+clean.portion||0,amount:r2(clean.amount),client_id:nn(clean.clientId),document_id:nn(clean.documentId),notes:clean.notes||""}));
+    S.workDays[id]=clean; chk(await sb.from("work_days").upsert({id,worker_id:clean.workerId,date:clean.date,portion:+clean.portion||0,amount:r2(clean.amount),client_id:nn(clean.clientId),document_id:nn(clean.documentId),notes:clean.notes||"",kind:clean.kind||"day"}));
   } else if(col==="items"){
     S.items[id]=clean; chk(await sb.from("saved_items").upsert({id,description:clean.desc,rate:r2(clean.rate)}));
   } else if(col==="invoices"){
@@ -483,7 +483,7 @@ async function put(col,id,data){
   }
 }
 async function putWorkDays(rows){
-  chk(await sb.from("work_days").upsert(rows.map(([id,x])=>({id,worker_id:x.workerId,date:x.date,portion:+x.portion||0,amount:r2(x.amount),client_id:nn(x.clientId),document_id:nn(x.documentId),notes:x.notes||""}))));
+  chk(await sb.from("work_days").upsert(rows.map(([id,x])=>({id,worker_id:x.workerId,date:x.date,portion:+x.portion||0,amount:r2(x.amount),client_id:nn(x.clientId),document_id:nn(x.documentId),notes:x.notes||"",kind:x.kind||"day"}))));
   rows.forEach(([id,x])=>{ S.workDays[id]=x; });
 }
 async function del(col,id){
@@ -593,6 +593,7 @@ function onGlobalClick(e){
   else if(a==="new-quote") newDoc("quote", v?S.clients[v]&&{id:v,...S.clients[v]}:null);
   else if(a==="new-expense") openExpense(null);
   else if(a==="new-workday") openWorkDay(null,v||"");
+  else if(a==="new-overtime"){ openWorkDay(null,v||""); dayDraft.mode="ot"; render(); }
   else if(a==="workday") openWorkDay(v);
   else if(a==="worker") go("worker",{id:v});
   else if(a==="pay-worker") openWorkerPay(v);
@@ -1694,6 +1695,10 @@ function renderBackup(app){
 /* ================= TEAM: days worked and paying subcontractors ================= */
 const fmtDays = n => { const v=Math.round(n*100)/100; return `${v} day${v===1?"":"s"}`; };
 const portionLabel = p => p===1?"Full day":p===0.5?"Half day":p===0?"Price work":`${p} day`;
+const OT_HOURS = 8; // a working day is 8 hours; overtime is paid at the normal day rate
+const isOT = x => x && x.kind==="ot";
+const fmtHours = h => { const v=Math.round(h*100)/100; return `${v} hour${v===1?"":"s"}`; };
+const dayLabel = x => isOT(x) ? `Overtime · ${fmtHours(x.portion*OT_HOURS)} (${fmtDays(x.portion)})` : portionLabel(x.portion);
 function weekStartISO(iso){ const d=new Date(iso+"T12:00:00"); const k=(d.getDay()+6)%7; d.setDate(d.getDate()-k); return d.toISOString().slice(0,10); }
 const workerPayments = wid => allExpenses().filter(e=>e.workerId===wid);
 // Days always count. Payments recorded in Team always count, whatever their date, so past weeks can be filled in.
@@ -1735,7 +1740,7 @@ function renderTeam(app){
     <button class="hd link" data-act="worker" data-v="${id}" style="color:inherit;text-align:left"><b>${esc(w.name)}</b><span class="sub">${money(w.dayRate)} a day ›</span></button>
     <button class="wk-nums wk-tap" data-act="week" data-v="${id}" aria-label="See this week's breakdown"><div>This week<b>${fmtDays(s.week)}</b></div><div>Earned this week<b>${money(s.weekAmt)}</b></div><div>Paid this week<b>${money((s.weeks[s.weeks.length-1]||{}).paid||0)}</b></div><span class="wk-more">See the week ›</span></button>
     <div class="hd" style="border-top:1px solid var(--line);padding-top:10px"><span><span class="sub">Total to pay now</span>${s.owed!==s.weekAmt&&s.weeks.length>1?`<br><span class="sub" style="font-size:.8rem">includes earlier weeks not yet paid</span>`:""}</span><span class="owed" style="${s.owed>0?"color:var(--bad)":""}">${money(s.owed)}</span></div>
-    <div class="btns"><button class="btn primary" data-act="new-workday" data-v="${id}">+ Log a day</button><button class="btn" data-act="pay-worker" data-v="${id}">Pay ${esc(w.name.split(" ")[0])}</button></div>
+    <div class="btns"><button class="btn primary" data-act="new-workday" data-v="${id}">+ Log a day</button><button class="btn" data-act="new-overtime" data-v="${id}">+ Overtime</button><button class="btn" data-act="pay-worker" data-v="${id}">Pay ${esc(w.name.split(" ")[0])}</button></div>
   </div>`; }).join(""):`<div class="list"><div class="empty">No painters added yet.</div></div>`}
   ${(()=>{ const js=jobsSummary(); if(!js.length) return "";
     return `<div class="sect"><h2>Jobs</h2><span class="sub">${js.length}</span></div>
@@ -1752,7 +1757,7 @@ function renderTeam(app){
       <span class="meta">${esc(e.method)}${e.clientId&&S.clients[e.clientId]?` · ${esc(S.clients[e.clientId].name)}`:""}${docNo(e.documentId)?` · ${esc(docNo(e.documentId))}`:""}</span><span class="meta r">${niceDate(e.date)}</span></button>`).join("")}</div>`; })()}
   <div class="sect"><h2>Recent days</h2></div>
   <div class="list">${recent.length?recent.map(x=>`<button class="row" data-act="workday" data-v="${x.id}"><span class="who">${esc(S.workers[x.workerId]?.name||"Painter")}</span><span class="amt">${money(x.amount)}</span>
-    <span class="meta">${portionLabel(x.portion)}${x.clientId&&S.clients[x.clientId]?` · ${esc(S.clients[x.clientId].name)}`:""}</span><span class="meta r">${niceDate(x.date)}</span></button>`).join(""):`<div class="empty">Days you log show here.</div>`}</div>`;
+    <span class="meta">${dayLabel(x)}${x.clientId&&S.clients[x.clientId]?` · ${esc(S.clients[x.clientId].name)}`:""}</span><span class="meta r">${niceDate(x.date)}</span></button>`).join(""):`<div class="empty">Days you log show here.</div>`}</div>`;
   fab("+ Log work day","new-workday");
   $("#addWorker").onclick=()=>{ workerDraft={id:uid("wkr_"),isNew:true,name:"",dayRate:"",trackingFrom:todayISO(),active:true,notes:""}; go("workerEdit"); };
 }
@@ -1765,7 +1770,7 @@ function renderWorker(app){
   s.days.forEach(x=>{ const k=x.date.slice(0,7); const m=months[k]=months[k]||{days:0,earned:0,paid:0}; m.days+=x.portion; m.earned+=x.amount; });
   s.pays.forEach(x=>{ const k=x.date.slice(0,7); const m=months[k]=months[k]||{days:0,earned:0,paid:0}; m.paid+=x.amount; });
   const mk=Object.keys(months).sort().reverse().slice(0,12);
-  const events=[...s.days.map(x=>({kind:"day",id:x.id,date:x.date,amt:x.amount,t:portionLabel(x.portion)+(x.clientId&&S.clients[x.clientId]?` · ${S.clients[x.clientId].name}`:"")+(docNo(x.documentId)?` · ${docNo(x.documentId)}`:"")})),
+  const events=[...s.days.map(x=>({kind:"day",id:x.id,date:x.date,amt:x.amount,t:dayLabel(x)+(x.clientId&&S.clients[x.clientId]?` · ${S.clients[x.clientId].name}`:"")+(docNo(x.documentId)?` · ${docNo(x.documentId)}`:"")})),
     ...s.pays.map(x=>({kind:"pay",id:x.id,date:x.date,amt:x.amount,t:`Paid · ${x.method||""}${x.clientId&&S.clients[x.clientId]?` · ${S.clients[x.clientId].name}`:""}${docNo(x.documentId)?` · ${docNo(x.documentId)}`:""}`}))]
     .sort((a,b)=>b.date.localeCompare(a.date)).slice(0,60);
   app.innerHTML=`
@@ -1811,12 +1816,13 @@ function renderWorkerEdit(app){
 let dayDraft=null;
 function openWorkDay(id,workerId=""){
   if(id){ const x=S.workDays[id]; const r=S.workers[x.workerId]?.dayRate||0;
+    if(isOT(x)){ dayDraft={id,...JSON.parse(JSON.stringify(x)),workers:[x.workerId],mode:"ot",custom:"",hours:String(Math.round(x.portion*OT_HOURS*100)/100)}; go("workDay"); return; }
     const mode = (x.portion===1||x.portion===0.5)&&Math.abs(x.amount-r*x.portion)<0.005 ? (x.portion===1?"full":"half") : "other";
     dayDraft={id,...JSON.parse(JSON.stringify(x)),workers:[x.workerId],mode,custom:mode==="other"?String(x.amount):""}; }
   else {
     const ws=activeWorkers().map(([k])=>k);
     const last=Object.values(S.workDays).sort((a,b)=>b.date.localeCompare(a.date))[0];
-    dayDraft={id:null,isNew:true,date:todayISO(),dates:[todayISO()],weekOf:weekStartISO(todayISO()),mode:"full",custom:"",workers:workerId?[workerId]:ws,clientId:last?.clientId||"",documentId:last?.documentId||"",notes:""};
+    dayDraft={id:null,isNew:true,date:todayISO(),dates:[todayISO()],weekOf:weekStartISO(todayISO()),mode:"full",custom:"",hours:"",workers:workerId?[workerId]:ws,clientId:last?.clientId||"",documentId:last?.documentId||"",notes:""};
   }
   go("workDay");
 }
@@ -1825,15 +1831,17 @@ function renderWorkDay(app){
   const mode=d.mode;
   const clientOpts=Object.entries(S.clients).sort((a,b)=>a[1].name.localeCompare(b[1].name)).map(([id,c])=>`<option value="${id}" ${d.clientId===id?"selected":""}>${esc(c.name)}</option>`).join("");
   const invs=docs("invoice").concat(docs("quote")).filter(i=>!d.clientId||i.clientId===d.clientId).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,30);
-  const amountFor=wid=>{ const r=S.workers[wid]?.dayRate||0; return mode==="other"?r2(d.custom||0):r2(r*(mode==="half"?0.5:1)); };
+  const amountFor=wid=>{ const r=S.workers[wid]?.dayRate||0; if(mode==="ot") return r2(r*(+d.hours||0)/OT_HOURS); return mode==="other"?r2(d.custom||0):r2(r*(mode==="half"?0.5:1)); };
   app.innerHTML=`
   <div class="top">${backBtn()}<button class="btn small primary" id="save">Save</button></div>
-  <h1 style="margin-bottom:12px">${d.isNew?"Log work days":"Edit work day"}</h1>
+  <h1 style="margin-bottom:12px">${d.isNew?(mode==="ot"?"Log overtime":"Log work days"):(mode==="ot"?"Edit overtime":"Edit work day")}</h1>
   <div class="card">
     <div class="field"><span class="label">Who worked</span>
       <div class="who-pick">${(d.isNew?ws:ws.filter(([id])=>d.workers.includes(id)).concat(d.workers.filter(id=>!ws.find(([k])=>k===id)).map(id=>[id,S.workers[id]||{name:"Painter"}]))).map(([id,w])=>`<label><input type="checkbox" data-w="${id}" ${d.workers.includes(id)?"checked":""} ${d.isNew?"":"disabled"}> ${esc(w.name)}</label>`).join("")}</div></div>
-    ${d.isNew?(()=>{ const days=[...Array(7)].map((_,i)=>addDays(d.weekOf,i)); const today=todayISO();
-      const logged=new Set(Object.values(S.workDays).filter(x=>d.workers.includes(x.workerId)).map(x=>x.date));
+    ${d.isNew&&mode==="ot"?`<div class="field"><span class="label">Week the overtime was worked</span>
+      <div class="wk-nav"><button class="btn small" id="wk-prev" aria-label="Previous week">‹</button><span class="sub">${niceDate(d.weekOf)} – ${niceDate(addDays(d.weekOf,6))}</span><button class="btn small" id="wk-next" aria-label="Next week">›</button></div></div>`
+    :d.isNew?(()=>{ const days=[...Array(7)].map((_,i)=>addDays(d.weekOf,i)); const today=todayISO();
+      const logged=new Set(Object.values(S.workDays).filter(x=>!isOT(x)&&d.workers.includes(x.workerId)).map(x=>x.date));
       return `<div class="field"><div class="wk-nav"><span class="label">Days worked · tap each day</span><span class="sub">${d.dates.length} selected</span></div>
       <div class="wk-nav"><button class="btn small" id="wk-prev" aria-label="Previous week">‹</button><span class="sub">${niceDate(days[0])} – ${niceDate(days[6])}</span><button class="btn small" id="wk-next" aria-label="Next week">›</button></div>
       <div class="wk-days">${days.map(iso=>{ const dt=new Date(iso+"T12:00:00"); return `<button data-day="${iso}" aria-pressed="${d.dates.includes(iso)}" class="${iso===today?"today":""}" title="${logged.has(iso)?"Already has a day logged":""}"><small>${dt.toLocaleDateString("en-GB",{weekday:"short"}).slice(0,2)}</small>${dt.getDate()}${logged.has(iso)?'<span class="dot"></span>':""}</button>`; }).join("")}</div>
@@ -1841,7 +1849,10 @@ function renderWorkDay(app){
       ${logged.size&&days.some(x=>logged.has(x))?`<span class="sub">An orange dot means a day is already logged for one of the ticked painters.</span>`:""}</div>`; })()
     :`<label class="field" style="max-width:220px"><span class="label">Date</span><input id="wd-date" type="date" value="${esc(d.date)}"></label>`}
     <div class="field"><span class="label">How long</span>
-      <div class="seg2"><button data-mode="full" aria-pressed="${mode==="full"}">Full day</button><button data-mode="half" aria-pressed="${mode==="half"}">Half day</button><button data-mode="other" aria-pressed="${mode==="other"}">Set amount</button></div></div>
+      ${d.isNew||mode!=="ot"?`<div class="seg2"><button data-mode="full" aria-pressed="${mode==="full"}">Full day</button><button data-mode="half" aria-pressed="${mode==="half"}">Half day</button><button data-mode="other" aria-pressed="${mode==="other"}">Set amount</button>${d.isNew?`<button data-mode="ot" aria-pressed="${mode==="ot"}">Overtime</button>`:""}</div>`:""}</div>
+    ${mode==="ot"?`<div class="field"><span class="label">Overtime hours (each painter)</span>
+      <div class="grid2" style="align-items:center"><input id="wd-hours" inputmode="decimal" value="${esc(d.hours)}" placeholder="e.g. 16" style="max-width:140px"><span class="sub" id="wd-hdays">${+d.hours>0?`= ${fmtDays((+d.hours)/OT_HOURS)} at the normal day rate`:`${OT_HOURS} hours = 1 day, paid at the normal day rate`}</span></div>
+      <div class="btns">${[4,8,16].map(h=>`<button class="btn small" data-hrs="${h}">${h===4?"½ day (4 h)":h===8?"1 day (8 h)":"2 days (16 h)"}</button>`).join("")}</div></div>`:""}
     ${mode==="other"?`<label class="field" style="max-width:200px"><span class="label">Amount £ (each)</span><input id="wd-custom" inputmode="decimal" value="${esc(d.custom)}" placeholder="e.g. 250"></label>`:""}
     <div class="totals" id="wd-tot">${totLines()}</div>
   </div>
@@ -1851,35 +1862,51 @@ function renderWorkDay(app){
     <label class="field"><span class="label">Notes</span><input id="wd-notes" value="${esc(d.notes)}" placeholder="e.g. Hallway and stairs"></label>
   </div>
   ${d.isNew?"":`<div class="btns" style="justify-content:flex-end"><button class="btn danger" id="del">Delete</button></div>`}`;
-  function totLines(){ const n=d.isNew?d.dates.length:1; return d.workers.map(wid=>`<div><span>${esc(S.workers[wid]?.name||"")}${n>1?` · ${n} × ${money(amountFor(wid))}`:""}</span><span>${money(amountFor(wid)*n)}</span></div>`).join("")+(d.workers.length>1&&n>0?`<div class="big"><span>Total</span><span>${money(d.workers.reduce((a,w)=>a+amountFor(w)*n,0))}</span></div>`:""); }
+  function totLines(){ const n=d.isNew&&mode!=="ot"?d.dates.length:1; return d.workers.map(wid=>`<div><span>${esc(S.workers[wid]?.name||"")}${n>1?` · ${n} × ${money(amountFor(wid))}`:""}</span><span>${money(amountFor(wid)*n)}</span></div>`).join("")+(d.workers.length>1&&n>0?`<div class="big"><span>Total</span><span>${money(d.workers.reduce((a,w)=>a+amountFor(w)*n,0))}</span></div>`:""); }
   $("#wd-tot").innerHTML=totLines();
-  const keep=()=>{ const di=$("#wd-date"); if(di) d.date=di.value; d.notes=$("#wd-notes").value; d.clientId=$("#wd-client").value; d.documentId=$("#wd-doc").value; const c=$("#wd-custom"); if(c) d.custom=c.value; };
+  const keep=()=>{ const di=$("#wd-date"); if(di) d.date=di.value; const hh=$("#wd-hours"); if(hh) d.hours=hh.value; d.notes=$("#wd-notes").value; d.clientId=$("#wd-client").value; d.documentId=$("#wd-doc").value; const c=$("#wd-custom"); if(c) d.custom=c.value; };
   app.querySelectorAll("[data-w]").forEach(cb=>cb.onchange=()=>{ keep(); d.workers=[...app.querySelectorAll("[data-w]:checked")].map(x=>x.dataset.w); rerenderKeep(); });
   app.querySelectorAll("[data-mode]").forEach(b=>b.onclick=()=>{ keep(); d.mode=b.dataset.mode; rerenderKeep(); });
   $("#wd-client").onchange=()=>{ keep(); const doc=S.invoices[d.documentId]; if(doc&&doc.clientId!==d.clientId) d.documentId=""; rerenderKeep(); };
   $("#wd-doc").onchange=()=>{ keep(); const doc=S.invoices[d.documentId]; if(doc&&doc.clientId) d.clientId=doc.clientId; rerenderKeep(); };
   const c=$("#wd-custom"); if(c) c.oninput=()=>{ d.custom=c.value; $("#wd-tot").innerHTML=totLines(); };
+  const hi=$("#wd-hours"); if(hi) hi.oninput=()=>{ d.hours=hi.value; $("#wd-tot").innerHTML=totLines(); $("#wd-hdays").textContent=+d.hours>0?`= ${fmtDays((+d.hours)/OT_HOURS)} at the normal day rate`:`${OT_HOURS} hours = 1 day, paid at the normal day rate`; };
+  app.querySelectorAll("[data-hrs]").forEach(b=>b.onclick=()=>{ keep(); d.hours=b.dataset.hrs; rerenderKeep(); });
   app.querySelectorAll("[data-day]").forEach(b=>b.onclick=()=>{ keep(); const iso=b.dataset.day; d.dates=d.dates.includes(iso)?d.dates.filter(x=>x!==iso):d.dates.concat(iso).sort(); rerenderKeep(); });
   const wp=$("#wk-prev"); if(wp){ wp.onclick=()=>{ keep(); d.weekOf=addDays(d.weekOf,-7); rerenderKeep(); };
     $("#wk-next").onclick=()=>{ keep(); d.weekOf=addDays(d.weekOf,7); rerenderKeep(); };
-    $("#wk-mf").onclick=()=>{ keep(); const wk=[0,1,2,3,4].map(i=>addDays(d.weekOf,i)); d.dates=[...new Set(d.dates.filter(x=>x<d.weekOf||x>addDays(d.weekOf,6)).concat(wk))].sort(); rerenderKeep(); };
-    $("#wk-clear").onclick=()=>{ keep(); d.dates=[]; rerenderKeep(); }; }
+    const mf=$("#wk-mf"); if(mf) mf.onclick=()=>{ keep(); const wk=[0,1,2,3,4].map(i=>addDays(d.weekOf,i)); d.dates=[...new Set(d.dates.filter(x=>x<d.weekOf||x>addDays(d.weekOf,6)).concat(wk))].sort(); rerenderKeep(); };
+    const wc=$("#wk-clear"); if(wc) wc.onclick=()=>{ keep(); d.dates=[]; rerenderKeep(); }; }
   $("#save").onclick=async()=>{ keep();
+    if(mode==="ot"){
+      if(!d.workers.length){ toast("Tick who did the overtime"); return; }
+      const hrs=+d.hours; if(!(hrs>0)){ toast("Enter the overtime hours"); return; }
+      const sv=$("#save"); if(sv.disabled) return; sv.disabled=true; sv.textContent="Saving…";
+      try{
+        const portion=Math.round(hrs/OT_HOURS*10000)/10000;
+        if(!d.isNew){ if(!d.date){ toast("Pick the date"); sv.disabled=false; sv.textContent="Save"; return; }
+          await put("workDays",d.id,{workerId:d.workers[0],date:d.date,portion,amount:amountFor(d.workers[0]),clientId:d.clientId,documentId:d.documentId,notes:d.notes,kind:"ot"}); toast("Overtime saved"); back(); return; }
+        // overtime is dated the Friday of the week it was worked, so it shows in that week
+        const date=addDays(d.weekOf,4);
+        await putWorkDays(d.workers.map(wid=>[uid("wd_"),{workerId:wid,date,portion,amount:amountFor(wid),clientId:d.clientId,documentId:d.documentId,notes:d.notes,kind:"ot"}]));
+        toast(`Overtime logged for ${d.workers.length===1?(S.workers[d.workers[0]]?.name||"1 painter"):d.workers.length+" painters"}`); back();
+      }catch(e){ sv.disabled=false; sv.textContent="Save"; toast("Couldn't save: "+(e?.message||"try again")); }
+      return; }
     const dates=d.isNew?d.dates:[d.date];
     if(!d.workers.length){ toast("Tick who worked"); return; } if(!dates.length||!dates[0]){ toast(d.isNew?"Tap the days they worked":"Pick the date"); return; }
     if(mode==="other"&&!(+d.custom>0)){ toast("Enter the amount"); return; }
     const portion = mode==="half" ? 0.5 : (mode==="other"&&d.portion===0 ? 0 : 1);
     try{
       const sv=$("#save"); if(sv.disabled) return; sv.disabled=true; sv.textContent="Saving…";
-      if(!d.isNew){ await put("workDays",d.id,{workerId:d.workers[0],date:dates[0],portion,amount:amountFor(d.workers[0]),clientId:d.clientId,documentId:d.documentId,notes:d.notes}); toast("Day saved"); back(); return; }
-      const have=new Set(Object.values(S.workDays).map(x=>x.workerId+"|"+x.date));
+      if(!d.isNew){ await put("workDays",d.id,{workerId:d.workers[0],date:dates[0],portion,amount:amountFor(d.workers[0]),clientId:d.clientId,documentId:d.documentId,notes:d.notes,kind:"day"}); toast("Day saved"); back(); return; }
+      const have=new Set(Object.values(S.workDays).filter(x=>!isOT(x)).map(x=>x.workerId+"|"+x.date));
       const rows=[]; let skipped=0;
       for(const wid of d.workers) for(const date of dates){ if(have.has(wid+"|"+date)){ skipped++; continue; }
-        rows.push([uid("wd_"),{workerId:wid,date,portion,amount:amountFor(wid),clientId:d.clientId,documentId:d.documentId,notes:d.notes}]); }
+        rows.push([uid("wd_"),{workerId:wid,date,portion,amount:amountFor(wid),clientId:d.clientId,documentId:d.documentId,notes:d.notes,kind:"day"}]); }
       if(rows.length) await putWorkDays(rows);
       toast(rows.length?`${rows.length} day${rows.length===1?"":"s"} logged${skipped?` · ${skipped} already logged, skipped`:""}`:"Those days were already logged"); back();
     }catch(e){ const sv=$("#save"); if(sv){ sv.disabled=false; sv.textContent="Save"; } toast("Couldn't save: "+(e?.message||"try again")); } };
-  const del2=$("#del"); if(del2) armDelete(del2,"Delete",async()=>{ await del("workDays",d.id); toast("Day deleted"); back(); });
+  const del2=$("#del"); if(del2) armDelete(del2,"Delete",async()=>{ await del("workDays",d.id); toast(mode==="ot"?"Overtime deleted":"Day deleted"); back(); });
 }
 
 let payDraft=null;
@@ -2072,7 +2099,7 @@ function renderWeek(app){
 
   <div class="sect"><h2>Days worked</h2><span class="sub">Tap to change</span></div>
   <div class="list">${days.length?days.map(x=>`<button class="row" data-act="workday" data-v="${x.id}"><span class="who">${esc(wid==="all"?first(x.workerId)+" · ":"")}${fmt(x.date)}</span><span class="amt">${money(x.amount)}</span>
-    <span class="meta">${portionLabel(x.portion)} · ${esc(jobName(x.clientId))}${docNo(x.documentId)?` · ${esc(docNo(x.documentId))}`:""}</span><span class="meta r">${esc(x.notes||"")}</span></button>`).join(""):`<div class="empty">No days logged this week.</div>`}</div>
+    <span class="meta">${dayLabel(x)} · ${esc(jobName(x.clientId))}${docNo(x.documentId)?` · ${esc(docNo(x.documentId))}`:""}</span><span class="meta r">${esc(x.notes||"")}</span></button>`).join(""):`<div class="empty">No days logged this week.</div>`}</div>
 
   <div class="sect"><h2>Payments this week</h2><span class="sub">Tap to change</span></div>
   <div class="list">${pays.length?pays.map(e=>`<button class="row" data-act="edit-pay" data-v="${e.id}"><span class="who">${esc(wid==="all"?first(e.workerId)+" · ":"")}${fmt(e.date)}</span><span class="amt" style="color:var(--ok)">${money(e.amount)}</span>
