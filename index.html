@@ -149,6 +149,8 @@ textarea{resize:vertical;min-height:70px}
 html,body{overflow-x:hidden;margin:0}
 .item{border:1px solid var(--line);border-radius:8px;padding:10px;display:grid;gap:8px}
 .item-nums{display:grid;grid-template-columns:minmax(0,1fr) 64px minmax(0,1fr) auto;gap:8px;align-items:end}
+.item-disc{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr) auto;gap:8px;align-items:end;border-top:1px dashed var(--line);padding-top:8px}
+.small-link{justify-self:start;font-size:.85rem;padding:2px 0}
 .item-amt{font-weight:700;padding:9px 0;text-align:right;font-variant-numeric:tabular-nums}
 .pay-row{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) minmax(0,1fr) auto;gap:8px;align-items:end}
 @media (max-width:480px){.pay-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}.pay-row .pm{grid-column:1/3;grid-row:2}}
@@ -235,6 +237,7 @@ nav.tabs button[aria-current="page"]{color:var(--accent)}
 .sh-table td{padding:8px 0 9px;font-size:14px;line-height:21px;color:#454545;vertical-align:top;white-space:pre-line;border-bottom:1px solid #bfbfbf}
 .sh-table tbody tr:not(:last-child) td{border-bottom:1px dashed #cfcfcf}
 .sh-table .r{text-align:right;white-space:nowrap}
+.sh-table tr.sh-disc td{font-style:italic;color:#666;padding-top:2px}
 .sh-table .c-rate{width:110px}.sh-table .c-qty{width:63px}.sh-table .c-amt{width:94px}
 .sh-foot{display:grid;grid-template-columns:minmax(0,1fr) 368px;column-gap:20px;padding-top:15px}
 .sh-pay .title{font-size:18px;line-height:24px;color:#3d3d3d;margin:15px 0 20px}
@@ -349,8 +352,12 @@ function norm(i){
   if(!Array.isArray(i.items)) i.items=[];
   return i;
 }
+// a line can carry an optional discount (only when you add one); the line's amount is after the discount
+const lineGross = i => (Number(i.rate)||0)*(Number(i.qty)||0);
+const lineDisc = i => i && i.discount!==undefined && i.discount!==null ? Math.max(0,Number(i.discount)||0) : 0;
+const lineAmt = i => lineGross(i)-lineDisc(i);
 function totals(inv){
-  const sub = (inv.items||[]).reduce((a,i)=>a+(Number(i.rate)||0)*(Number(i.qty)||0),0);
+  const sub = (inv.items||[]).reduce((a,i)=>a+lineAmt(i),0);
   const vat = inv.vatOn ? sub*(Number(inv.vatRate)||0)/100 : 0;
   const total = r2(sub+vat);
   const paid = inv.type==="quote" ? 0 : r2((inv.payments||[]).reduce((a,p)=>a+(Number(p.amount)||0),0));
@@ -861,9 +868,14 @@ function renderDoc(app){
       <div class="item-nums">
         <label class="field"><span class="label">Rate £</span><input id="f-rate-${i}" data-i="${i}" data-f="rate" inputmode="decimal" value="${esc(it.rate)}"></label>
         <label class="field"><span class="label">Qty</span><input id="f-qty-${i}" data-i="${i}" data-f="qty" inputmode="decimal" value="${esc(it.qty)}"></label>
-        <div class="item-amt" id="amt-${i}">${money((+it.rate||0)*(+it.qty||0))}</div>
+        <div class="item-amt" id="amt-${i}">${money(lineAmt(it))}</div>
         <button class="icon-btn" data-rm="${i}" aria-label="Remove line" title="Remove line">✕</button>
       </div>
+      ${it.discount!==undefined&&it.discount!==null?`<div class="item-disc">
+        <label class="field"><span class="label">Discount £</span><input id="f-disc-${i}" data-i="${i}" data-f="discount" inputmode="decimal" value="${esc(it.discount)}" placeholder="e.g. 300"></label>
+        <label class="field"><span class="label">Reason (shows on the invoice)</span><input data-i="${i}" data-f="discountNote" value="${esc(it.discountNote||"")}" placeholder="e.g. Goodwill: repaint of front door"></label>
+        <button class="icon-btn" data-rmdisc="${i}" aria-label="Remove discount" title="Remove discount">✕</button></div>`
+      :`<button class="link small-link" data-adddisc="${i}" type="button">+ Discount on this line</button>`}
     </div>`).join("")}
     <div class="btns"><button class="btn small" id="addItem">+ Add line</button>${Object.keys(S.items).length?`<select id="pickItem" style="width:auto;max-width:100%"><option value="">+ Add a saved item…</option>${Object.entries(S.items).sort((a,b)=>a[1].desc.localeCompare(b[1].desc)).map(([id,it])=>`<option value="${id}">${esc(it.desc.split("\n")[0])} · ${money(it.rate)}</option>`).join("")}</select>`:""}</div>
     <label class="check"><input type="checkbox" id="f-vat" data-k="vatOn" ${d.vatOn?"checked":""}> Charge VAT at <input id="f-vatrate" data-k="vatRate" inputmode="decimal" style="width:64px" value="${esc(d.vatRate)}">%</label>
@@ -916,6 +928,8 @@ function renderDoc(app){
   bindDocHead(app);
   const pick=$("#pickItem"); if(pick) pick.onchange=e=>{ const it=S.items[e.target.value]; if(!it) return; const blank=d.items.length===1&&!d.items[0].desc&&!d.items[0].rate; if(blank) d.items=[]; d.items.push({desc:it.desc,rate:String(it.rate),qty:1}); rerenderKeep(); };
   $("#addItem").onclick=()=>{ d.items.push({desc:"",rate:"",qty:1}); rerenderKeep(); $(`#f-desc-${d.items.length-1}`).focus(); };
+  app.querySelectorAll("[data-adddisc]").forEach(b=>b.onclick=()=>{ const i=+b.dataset.adddisc; d.items[i].discount=""; d.items[i].discountNote=""; rerenderKeep(); const x=$(`#f-disc-${i}`); if(x) x.focus(); });
+  app.querySelectorAll("[data-rmdisc]").forEach(b=>b.onclick=()=>{ const it=d.items[+b.dataset.rmdisc]; delete it.discount; delete it.discountNote; rerenderKeep(); });
   app.querySelectorAll("[data-rm]").forEach(b=>b.onclick=()=>{ d.items.splice(+b.dataset.rm,1); if(!d.items.length) d.items.push({desc:"",rate:"",qty:1}); rerenderKeep(); });
   const cs=$("#f-client"); if(cs) cs.onchange=e=>{ const c=S.clients[e.target.value]; d.clientId=e.target.value; d.client=c?{name:c.name,address:c.address||"",phone:c.phone||"",email:c.email||""}:{name:"",address:"",phone:"",email:""}; rerenderKeep(); };
   if(!isQ){
@@ -945,7 +959,7 @@ function onDocInput(e){
     if(el.dataset.k==="vatOn"){ rerenderKeep(); return; }
   } else if(el.dataset.f){
     const i=+el.dataset.i; d.items[i][el.dataset.f]=el.value;
-    const a=$(`#amt-${i}`); if(a) a.textContent=money((+d.items[i].rate||0)*(+d.items[i].qty||0));
+    const a=$(`#amt-${i}`); if(a) a.textContent=money(lineAmt(d.items[i]));
   } else if(el.dataset.p){ d.payments[+el.dataset.p][el.dataset.pf]=el.value; }
   else if(el.dataset.cp!==undefined){ const i=+el.dataset.cp, row=d.crewPlan[i], fld=el.dataset.cpf; row[fld]=el.value;
     const rate=S.workers[row.workerId]?.dayRate||0;
@@ -971,7 +985,7 @@ function crewFigures(d){
     const expected=Math.max(planned,earned,paid);
     return {w,planned,plannedDays,earned,days,paid,expected,toPay:r2(Math.max(0,expected-paid))}; });
   const t=totals(d), matTot=r2(mats.reduce((a,e)=>a+e.amount,0));
-  const matLines=(d.items||[]).filter(i=>/material/i.test(i.desc||"")), matFromLines=r2(matLines.reduce((a,i)=>a+(Number(i.rate)||0)*(Number(i.qty)||0),0)*(d.vatOn?1+(Number(d.vatRate)||0)/100:1));
+  const matLines=(d.items||[]).filter(i=>/material/i.test(i.desc||"")), matFromLines=r2(matLines.reduce((a,i)=>a+lineAmt(i),0)*(d.vatOn?1+(Number(d.vatRate)||0)/100:1));
   const matSet=d.matCharged!==""&&d.matCharged!==undefined&&d.matCharged!==null&&!isNaN(+d.matCharged);
   const matCharged=matSet?r2(d.matCharged):matFromLines;
   const matByPainter=r2(mats.filter(e=>e.owedTo).reduce((a,e)=>a+e.amount,0)), matCount=mats.length;
@@ -1074,6 +1088,7 @@ async function saveDoc(leave,quiet){
   if(blank.length&&!quiet){ toast(blank.length>1?"Some payment lines have no amount. Type the amount, or tap ✕ to remove them.":"A payment line has no amount. Type the amount, or tap ✕ to remove it."); const a=$(`#p-amt-${d.payments.indexOf(blank[0])}`); if(a){ a.focus(); a.scrollIntoView({block:"center"}); } return false; }
   d.number=(d.number||"").trim()||nextNumber(d.type);
   d.items=d.items.filter((it,i)=>i===0||it.desc||it.rate);
+  d.items.forEach(it=>{ if(it.discount!==undefined&&!(+it.discount>0)){ delete it.discount; delete it.discountNote; } });
   d.payments=(d.payments||[]).filter(p=>+p.amount).map(p=>({...p,amount:r2(p.amount)}));
   if(d.type==="invoice"&&d.depositOn&&!(+d.depositAmount>0)&&d.payments.length){
     // fix the deposit at what was asked for when the first payment came in (or that payment, if it was smaller)
@@ -1127,7 +1142,7 @@ function sheetHTML(inv){
       ${c.phone?`<div class="ln">${PHONE_ICON}<span>${esc(c.phone)}</span></div>`:""}
       ${c.email?`<div class="ln">${esc(c.email)}</div>`:""}</div>
     <table class="sh-table"><thead><tr><th>DESCRIPTION</th><th class="r c-rate">RATE</th><th class="r c-qty">QTY</th><th class="r c-amt">AMOUNT</th></tr></thead>
-      <tbody>${items.map(i=>`<tr class="brk"><td>${esc(i.desc)}</td><td class="r">${money(i.rate)}</td><td class="r">${esc(i.qty)}</td><td class="r">${money((+i.rate||0)*(+i.qty||0))}</td></tr>`).join("")}</tbody></table>
+      <tbody>${items.map(i=>`<tr class="brk"><td>${esc(i.desc)}</td><td class="r">${money(i.rate)}</td><td class="r">${esc(i.qty)}</td><td class="r">${money(lineGross(i))}</td></tr>${lineDisc(i)>0?`<tr class="brk sh-disc"><td>Discount${i.discountNote?`: ${esc(i.discountNote)}`:""}</td><td></td><td></td><td class="r">−${money(lineDisc(i))}</td></tr>`:""}`).join("")}</tbody></table>
     <div class="sh-foot brk">
       <div class="sh-pay"><div class="title">Payment Info</div><div class="sh-k">Payment instructions</div>
         ${st.payee?`<div>Payee Name: ${esc(st.payee)}</div>`:""}${st.account?`<div>Account Number: ${esc(st.account)}</div>`:""}${st.sortCode?`<div>Sort Code: ${esc(st.sortCode)}</div>`:""}</div>
